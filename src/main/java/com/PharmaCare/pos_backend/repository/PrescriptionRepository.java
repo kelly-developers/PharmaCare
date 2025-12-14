@@ -1,7 +1,8 @@
 package com.PharmaCare.pos_backend.repository;
 
-import com.PharmaCare.pos_backend.model.entity.Prescription;
-import com.PharmaCare.pos_backend.model.entity.PrescriptionStatus;
+import com.PharmaCare.pos_backend.enums.PrescriptionStatus;
+import com.PharmaCare.pos_backend.model.Prescription;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;

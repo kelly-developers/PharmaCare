@@ -1,5 +1,6 @@
-package com.PharmaCare.pos_backend.model.entity;
+package com.PharmaCare.pos_backend.model;
 
+import com.PharmaCare.pos_backend.enums.Role;
 import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;

@@ -1,8 +1,8 @@
 package com.PharmaCare.pos_backend.service;
 
 import com.PharmaCare.pos_backend.dto.request.CategoryRequest;
-import com.PharmaCare.pos_backend.model.dto.response.CategoryResponse;
-import com.PharmaCare.pos_backend.model.entity.Category;
+import com.PharmaCare.pos_backend.dto.response.CategoryResponse;
+import com.PharmaCare.pos_backend.model.Category;
 import com.PharmaCare.pos_backend.exception.ApiException;
 import com.PharmaCare.pos_backend.exception.ResourceNotFoundException;
 import com.PharmaCare.pos_backend.repository.CategoryRepository;

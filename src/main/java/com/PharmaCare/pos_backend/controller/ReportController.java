@@ -1,7 +1,7 @@
 package com.PharmaCare.pos_backend.controller;
 
 import com.PharmaCare.pos_backend.dto.response.*;
-import com.PharmaCare.pos_backend.model.dto.response.ApiResponse;
+import com.PharmaCare.pos_backend.dto.response.ApiResponse;
 import com.PharmaCare.pos_backend.service.ReportService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.format.annotation.DateTimeFormat;

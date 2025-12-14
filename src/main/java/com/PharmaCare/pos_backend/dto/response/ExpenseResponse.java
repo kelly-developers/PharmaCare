@@ -1,6 +1,7 @@
-package com.PharmaCare.pos_backend.model.dto.response;
+package com.PharmaCare.pos_backend.dto.response;
 
-import com.PharmaCare.pos_backend.model.entity.ExpenseStatus;
+
+import com.PharmaCare.pos_backend.enums.ExpenseStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;

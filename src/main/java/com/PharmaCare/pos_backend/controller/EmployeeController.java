@@ -1,12 +1,13 @@
 package com.PharmaCare.pos_backend.controller;
 
 import com.PharmaCare.pos_backend.dto.request.EmployeeRequest;
+import com.PharmaCare.pos_backend.enums.PayrollStatus;
 import com.PharmaCare.pos_backend.model.dto.request.PayrollRequest;
-import com.PharmaCare.pos_backend.model.dto.response.ApiResponse;
+import com.PharmaCare.pos_backend.dto.response.ApiResponse;
 import com.PharmaCare.pos_backend.model.dto.response.EmployeeResponse;
-import com.PharmaCare.pos_backend.model.dto.response.PaginatedResponse;
-import com.PharmaCare.pos_backend.model.dto.response.PayrollResponse;
-import com.PharmaCare.pos_backend.model.entity.PayrollStatus;
+import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
+import com.PharmaCare.pos_backend.dto.response.PayrollResponse;
+
 import com.PharmaCare.pos_backend.service.EmployeeService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

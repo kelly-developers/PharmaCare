@@ -2,12 +2,12 @@ package com.PharmaCare.pos_backend.service;
 
 import com.PharmaCare.pos_backend.dto.request.PurchaseOrderRequest;
 import com.PharmaCare.pos_backend.dto.request.StockAdditionRequest;
-import com.PharmaCare.pos_backend.model.dto.response.PaginatedResponse;
-import com.PharmaCare.pos_backend.model.dto.response.PurchaseOrderResponse;
-import com.PharmaCare.pos_backend.model.entity.*;
+import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
+import com.PharmaCare.pos_backend.dto.response.PurchaseOrderResponse;
+import com.PharmaCare.pos_backend.enums.PurchaseOrderStatus;
+import com.PharmaCare.pos_backend.model.*;
 import com.PharmaCare.pos_backend.exception.ApiException;
 import com.PharmaCare.pos_backend.exception.ResourceNotFoundException;
-import com.PharmaCare.pos_backend.model.entity.PurchaseOrderStatus;
 import com.PharmaCare.pos_backend.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

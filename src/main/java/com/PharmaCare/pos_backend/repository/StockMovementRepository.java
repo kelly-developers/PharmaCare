@@ -1,8 +1,9 @@
 package com.PharmaCare.pos_backend.repository;
 
-import com.PharmaCare.pos_backend.model.entity.Medicine;
-import com.PharmaCare.pos_backend.model.entity.StockMovement;
-import com.PharmaCare.pos_backend.model.entity.StockMovementType;
+import com.PharmaCare.pos_backend.enums.StockMovementType;
+import com.PharmaCare.pos_backend.model.Medicine;
+import com.PharmaCare.pos_backend.model.StockMovement;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;

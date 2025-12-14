@@ -1,6 +1,7 @@
-package com.PharmaCare.pos_backend.model.dto.response;
+package com.PharmaCare.pos_backend.dto.response;
 
-import com.PharmaCare.pos_backend.model.entity.PaymentMethod;
+
+import com.PharmaCare.pos_backend.enums.PaymentMethod;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;

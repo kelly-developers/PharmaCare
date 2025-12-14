@@ -1,6 +1,6 @@
 package com.PharmaCare.pos_backend.repository;
 
-import com.PharmaCare.pos_backend.model.entity.Medicine;
+import com.PharmaCare.pos_backend.model.Medicine;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;

@@ -1,6 +1,6 @@
 package com.PharmaCare.pos_backend.repository;
 
-import com.PharmaCare.pos_backend.model.entity.PurchaseOrderItem;
+import com.PharmaCare.pos_backend.model.PurchaseOrderItem;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 

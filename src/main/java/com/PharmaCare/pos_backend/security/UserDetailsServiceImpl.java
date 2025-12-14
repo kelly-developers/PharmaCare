@@ -1,6 +1,6 @@
 package com.PharmaCare.pos_backend.security;
 
-import com.PharmaCare.pos_backend.model.entity.User;
+import com.PharmaCare.pos_backend.model.User;
 import com.PharmaCare.pos_backend.repository.UserRepository;
 import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;

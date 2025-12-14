@@ -1,9 +1,9 @@
 package com.PharmaCare.pos_backend.service;
 
 import com.PharmaCare.pos_backend.dto.request.SupplierRequest;
-import com.PharmaCare.pos_backend.model.dto.response.PaginatedResponse;
-import com.PharmaCare.pos_backend.model.dto.response.SupplierResponse;
-import com.PharmaCare.pos_backend.model.entity.Supplier;
+import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
+import com.PharmaCare.pos_backend.dto.response.SupplierResponse;
+import com.PharmaCare.pos_backend.model.Supplier;
 import com.PharmaCare.pos_backend.exception.ApiException;
 import com.PharmaCare.pos_backend.exception.ResourceNotFoundException;
 import com.PharmaCare.pos_backend.repository.SupplierRepository;

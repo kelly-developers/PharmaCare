@@ -1,7 +1,8 @@
 package com.PharmaCare.pos_backend.repository;
 
-import com.PharmaCare.pos_backend.model.entity.Role;
-import com.PharmaCare.pos_backend.model.entity.User;
+
+import com.PharmaCare.pos_backend.enums.Role;
+import com.PharmaCare.pos_backend.model.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;

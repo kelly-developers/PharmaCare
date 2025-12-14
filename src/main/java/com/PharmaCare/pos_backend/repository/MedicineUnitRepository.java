@@ -1,7 +1,7 @@
 package com.PharmaCare.pos_backend.repository;
 
-import com.PharmaCare.pos_backend.model.entity.Medicine;
-import com.PharmaCare.pos_backend.model.entity.MedicineUnit;
+import com.PharmaCare.pos_backend.model.Medicine;
+import com.PharmaCare.pos_backend.model.MedicineUnit;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.stereotype.Repository;
 

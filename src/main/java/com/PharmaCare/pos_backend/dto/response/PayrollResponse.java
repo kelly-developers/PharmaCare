@@ -1,6 +1,7 @@
-package com.PharmaCare.pos_backend.model.dto.response;
+package com.PharmaCare.pos_backend.dto.response;
 
-import com.PharmaCare.pos_backend.model.entity.PayrollStatus;
+
+import com.PharmaCare.pos_backend.enums.PayrollStatus;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;

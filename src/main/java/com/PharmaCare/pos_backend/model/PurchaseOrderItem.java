@@ -1,4 +1,4 @@
-package com.PharmaCare.pos_backend.model.entity;
+package com.PharmaCare.pos_backend.model;
 
 import jakarta.persistence.*;
 import lombok.*;
@@ -6,29 +6,35 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 @Entity
-@Table(name = "medicine_units")
+@Table(name = "purchase_order_items")
 @Getter
 @Setter
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-public class MedicineUnit {
+public class PurchaseOrderItem {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "medicine_id", nullable = false)
+    @JoinColumn(name = "purchase_order_id", nullable = false)
+    private PurchaseOrder purchaseOrder;
+
+    @ManyToOne(fetch = FetchType.LAZY)
+    @JoinColumn(name = "medicine_id")
     private Medicine medicine;
 
-    @Enumerated(EnumType.STRING)
     @Column(nullable = false)
-    private UnitType type;
+    private String medicineName;
 
     @Column(nullable = false)
     private int quantity;
 
     @Column(nullable = false, precision = 10, scale = 2)
-    private BigDecimal price;
+    private BigDecimal unitCost;
+
+    @Column(nullable = false, precision = 10, scale = 2)
+    private BigDecimal totalCost;
 }

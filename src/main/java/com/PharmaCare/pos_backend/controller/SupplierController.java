@@ -1,9 +1,9 @@
 package com.PharmaCare.pos_backend.controller;
 
 import com.PharmaCare.pos_backend.dto.request.SupplierRequest;
-import com.PharmaCare.pos_backend.model.dto.response.ApiResponse;
-import com.PharmaCare.pos_backend.model.dto.response.PaginatedResponse;
-import com.PharmaCare.pos_backend.model.dto.response.SupplierResponse;
+import com.PharmaCare.pos_backend.dto.response.ApiResponse;
+import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
+import com.PharmaCare.pos_backend.dto.response.SupplierResponse;
 import com.PharmaCare.pos_backend.service.SupplierService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

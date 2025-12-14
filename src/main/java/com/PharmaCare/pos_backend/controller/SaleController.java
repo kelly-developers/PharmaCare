@@ -3,10 +3,11 @@ package com.PharmaCare.pos_backend.controller;
 import com.PharmaCare.pos_backend.dto.request.SaleRequest;
 import com.PharmaCare.pos_backend.dto.response.DashboardSummary;
 import com.PharmaCare.pos_backend.dto.response.SalesSummary;
-import com.PharmaCare.pos_backend.model.dto.response.ApiResponse;
-import com.PharmaCare.pos_backend.model.dto.response.PaginatedResponse;
-import com.PharmaCare.pos_backend.model.dto.response.SaleResponse;
-import com.PharmaCare.pos_backend.model.entity.PaymentMethod;
+import com.PharmaCare.pos_backend.dto.response.ApiResponse;
+import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
+import com.PharmaCare.pos_backend.dto.response.SaleResponse;
+
+import com.PharmaCare.pos_backend.enums.PaymentMethod;
 import com.PharmaCare.pos_backend.service.SaleService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

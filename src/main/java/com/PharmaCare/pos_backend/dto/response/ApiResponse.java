@@ -1,4 +1,4 @@
-package com.PharmaCare.pos_backend.model.dto.response;
+package com.PharmaCare.pos_backend.dto.response;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;

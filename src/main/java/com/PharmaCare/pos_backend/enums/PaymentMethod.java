@@ -1,4 +1,4 @@
-package com.PharmaCare.pos_backend.model.entity;
+package com.PharmaCare.pos_backend.enums;
 
 public enum PaymentMethod {
     CASH,

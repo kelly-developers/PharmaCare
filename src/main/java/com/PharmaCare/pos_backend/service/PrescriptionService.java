@@ -1,12 +1,12 @@
 package com.PharmaCare.pos_backend.service;
 
 import com.PharmaCare.pos_backend.dto.request.PrescriptionRequest;
-import com.PharmaCare.pos_backend.model.dto.response.PaginatedResponse;
-import com.PharmaCare.pos_backend.model.dto.response.PrescriptionResponse;
-import com.PharmaCare.pos_backend.model.entity.Prescription;
-import com.PharmaCare.pos_backend.model.entity.PrescriptionItem;
-import com.PharmaCare.pos_backend.model.entity.PrescriptionStatus;
-import com.PharmaCare.pos_backend.model.entity.User;
+import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
+import com.PharmaCare.pos_backend.dto.response.PrescriptionResponse;
+import com.PharmaCare.pos_backend.enums.PrescriptionStatus;
+import com.PharmaCare.pos_backend.model.Prescription;
+import com.PharmaCare.pos_backend.model.PrescriptionItem;
+import com.PharmaCare.pos_backend.model.User;
 import com.PharmaCare.pos_backend.exception.ApiException;
 import com.PharmaCare.pos_backend.exception.ResourceNotFoundException;
 import com.PharmaCare.pos_backend.repository.PrescriptionRepository;

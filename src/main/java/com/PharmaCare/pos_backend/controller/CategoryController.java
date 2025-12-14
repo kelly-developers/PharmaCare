@@ -1,8 +1,8 @@
 package com.PharmaCare.pos_backend.controller;
 
 import com.PharmaCare.pos_backend.dto.request.CategoryRequest;
-import com.PharmaCare.pos_backend.model.dto.response.ApiResponse;
-import com.PharmaCare.pos_backend.model.dto.response.CategoryResponse;
+import com.PharmaCare.pos_backend.dto.response.ApiResponse;
+import com.PharmaCare.pos_backend.dto.response.CategoryResponse;
 import com.PharmaCare.pos_backend.service.CategoryService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

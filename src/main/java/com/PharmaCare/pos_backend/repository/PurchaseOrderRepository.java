@@ -1,7 +1,8 @@
 package com.PharmaCare.pos_backend.repository;
 
-import com.PharmaCare.pos_backend.model.entity.PurchaseOrder;
-import com.PharmaCare.pos_backend.model.entity.PurchaseOrderStatus;
+import com.PharmaCare.pos_backend.enums.PurchaseOrderStatus;
+import com.PharmaCare.pos_backend.model.PurchaseOrder;
+
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;
@@ -11,7 +12,6 @@ import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
-import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 

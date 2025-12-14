@@ -1,10 +1,10 @@
 package com.PharmaCare.pos_backend.service;
 
 import com.PharmaCare.pos_backend.dto.request.UserRequest;
-import com.PharmaCare.pos_backend.model.dto.response.PaginatedResponse;
-import com.PharmaCare.pos_backend.model.dto.response.UserResponse;
-import com.PharmaCare.pos_backend.model.entity.Role;
-import com.PharmaCare.pos_backend.model.entity.User;
+import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
+import com.PharmaCare.pos_backend.dto.response.UserResponse;
+import com.PharmaCare.pos_backend.enums.Role;
+import com.PharmaCare.pos_backend.model.User;
 import com.PharmaCare.pos_backend.exception.ApiException;
 import com.PharmaCare.pos_backend.exception.ResourceNotFoundException;
 import com.PharmaCare.pos_backend.exception.UnauthorizedException;

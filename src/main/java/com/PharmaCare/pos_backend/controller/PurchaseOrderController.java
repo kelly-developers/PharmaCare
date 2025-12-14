@@ -1,10 +1,10 @@
 package com.PharmaCare.pos_backend.controller;
 
 import com.PharmaCare.pos_backend.dto.request.PurchaseOrderRequest;
-import com.PharmaCare.pos_backend.model.dto.response.ApiResponse;
-import com.PharmaCare.pos_backend.model.dto.response.PaginatedResponse;
-import com.PharmaCare.pos_backend.model.dto.response.PurchaseOrderResponse;
-import com.PharmaCare.pos_backend.model.entity.PurchaseOrderStatus;
+import com.PharmaCare.pos_backend.dto.response.ApiResponse;
+import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
+import com.PharmaCare.pos_backend.dto.response.PurchaseOrderResponse;
+import com.PharmaCare.pos_backend.enums.PurchaseOrderStatus;
 import com.PharmaCare.pos_backend.service.PurchaseOrderService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

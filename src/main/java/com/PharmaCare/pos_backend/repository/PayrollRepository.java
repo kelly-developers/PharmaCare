@@ -1,7 +1,7 @@
 package com.PharmaCare.pos_backend.repository;
 
-import com.PharmaCare.pos_backend.model.entity.Payroll;
-import com.PharmaCare.pos_backend.model.entity.PayrollStatus;
+import com.PharmaCare.pos_backend.enums.PayrollStatus;
+import com.PharmaCare.pos_backend.model.Payroll;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;

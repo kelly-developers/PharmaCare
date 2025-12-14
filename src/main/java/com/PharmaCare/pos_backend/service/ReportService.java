@@ -1,8 +1,8 @@
 package com.PharmaCare.pos_backend.service;
 
 import com.PharmaCare.pos_backend.dto.response.*;
-import com.PharmaCare.pos_backend.model.entity.*;
-import com.PharmaCare.pos_backend.model.entity.PaymentMethod;
+import com.PharmaCare.pos_backend.model.Medicine;
+import com.PharmaCare.pos_backend.model.Sale;
 import com.PharmaCare.pos_backend.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;

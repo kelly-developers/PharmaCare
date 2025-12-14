@@ -2,10 +2,10 @@ package com.PharmaCare.pos_backend.controller;
 
 import com.PharmaCare.pos_backend.dto.request.StockAdjustmentRequest;
 import com.PharmaCare.pos_backend.dto.request.StockLossRequest;
-import com.PharmaCare.pos_backend.model.dto.response.ApiResponse;
-import com.PharmaCare.pos_backend.model.dto.response.PaginatedResponse;
-import com.PharmaCare.pos_backend.model.dto.response.StockMovementResponse;
-import com.PharmaCare.pos_backend.model.entity.StockMovementType;
+import com.PharmaCare.pos_backend.dto.response.ApiResponse;
+import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
+import com.PharmaCare.pos_backend.dto.response.StockMovementResponse;
+import com.PharmaCare.pos_backend.enums.StockMovementType;
 import com.PharmaCare.pos_backend.service.StockService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;

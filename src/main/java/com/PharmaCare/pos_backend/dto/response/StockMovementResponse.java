@@ -1,7 +1,7 @@
-package com.PharmaCare.pos_backend.model.dto.response;
+package com.PharmaCare.pos_backend.dto.response;
 
-import com.PharmaCare.pos_backend.model.entity.Role;
-import com.PharmaCare.pos_backend.model.entity.StockMovementType;
+import com.PharmaCare.pos_backend.enums.Role;
+import com.PharmaCare.pos_backend.enums.StockMovementType;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;

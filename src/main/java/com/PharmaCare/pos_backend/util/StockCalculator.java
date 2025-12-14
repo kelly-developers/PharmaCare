@@ -1,7 +1,7 @@
 package com.PharmaCare.pos_backend.util;
 
-import com.PharmaCare.pos_backend.model.entity.Medicine;
-import com.PharmaCare.pos_backend.model.entity.MedicineUnit;
+import com.PharmaCare.pos_backend.model.Medicine;
+import com.PharmaCare.pos_backend.model.MedicineUnit;
 
 import java.math.BigDecimal;
 

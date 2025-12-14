@@ -1,8 +1,9 @@
 package com.PharmaCare.pos_backend.repository;
 
-import com.PharmaCare.pos_backend.model.entity.PaymentMethod;
-import com.PharmaCare.pos_backend.model.entity.Sale;
-import com.PharmaCare.pos_backend.model.entity.User;
+
+import com.PharmaCare.pos_backend.enums.PaymentMethod;
+import com.PharmaCare.pos_backend.model.Sale;
+import com.PharmaCare.pos_backend.model.User;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.JpaRepository;

@@ -1,4 +1,4 @@
-package com.PharmaCare.pos_backend.model.dto.response;
+package com.PharmaCare.pos_backend.dto.response;
 
 import lombok.AllArgsConstructor;
 import lombok.Builder;
@@ -10,7 +10,7 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 @AllArgsConstructor
 public class AuthResponse {
-    private UserResponse user;
+    private com.PharmaCare.pos_backend.dto.response.UserResponse user;
     private String token;
     private String refreshToken;
 }
