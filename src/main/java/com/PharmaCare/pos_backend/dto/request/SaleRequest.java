@@ -1,6 +1,6 @@
 package com.PharmaCare.pos_backend.dto.request;
 
-import com.PharmaCare.pos_backend.model.entity.PaymentMethod;
+import com.PharmaCare.pos_backend.enums.PaymentMethod;
 import jakarta.validation.constraints.*;
 import lombok.Data;
 

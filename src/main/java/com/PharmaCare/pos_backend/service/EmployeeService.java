@@ -1,11 +1,12 @@
 package com.PharmaCare.pos_backend.service;
 
 import com.PharmaCare.pos_backend.dto.request.EmployeeRequest;
+import com.PharmaCare.pos_backend.dto.request.PayrollRequest;
 import com.PharmaCare.pos_backend.enums.PayrollStatus;
 import com.PharmaCare.pos_backend.model.Employee;
 import com.PharmaCare.pos_backend.model.Payroll;
 import com.PharmaCare.pos_backend.model.User;
-import com.PharmaCare.pos_backend.model.dto.request.PayrollRequest;
+
 import com.PharmaCare.pos_backend.model.dto.response.EmployeeResponse;
 import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
 import com.PharmaCare.pos_backend.dto.response.PayrollResponse;

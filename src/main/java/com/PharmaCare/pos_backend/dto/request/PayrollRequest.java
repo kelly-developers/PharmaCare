@@ -1,4 +1,4 @@
-package com.PharmaCare.pos_backend.model.dto.request;
+package com.PharmaCare.pos_backend.dto.request;
 
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

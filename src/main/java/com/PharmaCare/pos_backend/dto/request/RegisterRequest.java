@@ -1,6 +1,7 @@
 package com.PharmaCare.pos_backend.dto.request;
 
-import com.PharmaCare.pos_backend.model.entity.Role;
+
+import com.PharmaCare.pos_backend.enums.Role;
 import jakarta.validation.constraints.Email;
 import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;

@@ -1,8 +1,9 @@
 package com.PharmaCare.pos_backend.controller;
 
 import com.PharmaCare.pos_backend.dto.request.EmployeeRequest;
+import com.PharmaCare.pos_backend.dto.request.PayrollRequest;
 import com.PharmaCare.pos_backend.enums.PayrollStatus;
-import com.PharmaCare.pos_backend.model.dto.request.PayrollRequest;
+
 import com.PharmaCare.pos_backend.dto.response.ApiResponse;
 import com.PharmaCare.pos_backend.model.dto.response.EmployeeResponse;
 import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
