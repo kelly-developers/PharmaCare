@@ -58,3 +58,5 @@ public class StockMovement {
     @Column(updatable = false)
     private LocalDateTime createdAt;
 }
+
+//
