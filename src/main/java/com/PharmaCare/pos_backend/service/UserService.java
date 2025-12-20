@@ -154,7 +154,7 @@ public class UserService {
     }
 
     public long countUsersByRole(Role role) {
-        return userRepository.countByRoleAndIsActiveTrue(role);
+        return userRepository.countByRoleAndActiveTrue(role);
     }
 
     public User getCurrentUser() {
