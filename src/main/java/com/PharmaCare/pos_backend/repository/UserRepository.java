@@ -1,6 +1,5 @@
 package com.PharmaCare.pos_backend.repository;
 
-
 import com.PharmaCare.pos_backend.enums.Role;
 import com.PharmaCare.pos_backend.model.User;
 import org.springframework.data.domain.Page;
@@ -21,19 +20,23 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     Page<User> findAllByRole(Role role, Pageable pageable);
 
+    // FIXED: Use u.active instead of u.isActive if that's what's in your User entity
     @Query("SELECT u FROM User u WHERE " +
             "(:search IS NULL OR LOWER(u.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
             "LOWER(u.email) LIKE LOWER(CONCAT('%', :search, '%'))) AND " +
             "(:role IS NULL OR u.role = :role) AND " +
-            "u.isActive = true")
+            "u.active = true")  // Changed from u.isActive to u.active
     Page<User> searchUsers(@Param("search") String search,
                            @Param("role") Role role,
                            Pageable pageable);
 
-    List<User> findAllByIsActiveTrue();
+    // FIXED: Changed method name to match User entity field
+    List<User> findAllByActiveTrue();  // Changed from findAllByIsActiveTrue
 
-    long countByRoleAndIsActiveTrue(Role role);
+    // FIXED: Changed method name to match User entity field
+    long countByRoleAndActiveTrue(Role role);  // Changed from countByRoleAndIsActiveTrue
 
-    @Query("SELECT COUNT(u) FROM User u WHERE u.isActive = true")
+    // FIXED: Use u.active instead of u.isActive
+    @Query("SELECT COUNT(u) FROM User u WHERE u.active = true")  // Changed from u.isActive
     long countActiveUsers();
 }
