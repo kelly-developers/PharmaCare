@@ -10,6 +10,7 @@ import com.PharmaCare.pos_backend.model.Sale;
 import com.PharmaCare.pos_backend.repository.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
@@ -52,17 +53,18 @@ public class ReportService {
                 todaySales.multiply(BigDecimal.valueOf(0.3)) : BigDecimal.ZERO;
 
         // Stock information
-        long totalStockItems = medicineRepository.countByIsActiveTrue();
+        // FIXED: Changed from countByIsActiveTrue() to countByActiveTrue()
+        long totalStockItems = medicineRepository.countByActiveTrue();
 
         // Low stock items (below reorder level)
         int lowStockCount = medicineRepository.findLowStockItems(
-                        org.springframework.data.domain.PageRequest.of(0, 100))
+                        PageRequest.of(0, 100))
                 .getNumberOfElements();
 
         // Expiring items (within 90 days)
         LocalDate expiryThreshold = LocalDate.now().plusDays(90);
         int expiringCount = medicineRepository.findExpiringItems(expiryThreshold,
-                org.springframework.data.domain.PageRequest.of(0, 100)).getNumberOfElements();
+                PageRequest.of(0, 100)).getNumberOfElements();
 
         // Pending orders
         long pendingOrders = purchaseOrderRepository.countByStatus(
@@ -96,7 +98,7 @@ public class ReportService {
         // Get total sales for the period
         List<Sale> sales = saleRepository.findSalesByCriteria(
                 startDateTime, endDateTime, null, null,
-                org.springframework.data.domain.PageRequest.of(0, Integer.MAX_VALUE)).getContent();
+                PageRequest.of(0, Integer.MAX_VALUE)).getContent();
 
         // Calculate totals
         BigDecimal totalSales = sales.stream()
@@ -146,7 +148,8 @@ public class ReportService {
 
     public StockSummary getStockSummary() {
         // Get total items and quantity
-        long totalItems = medicineRepository.countByIsActiveTrue();
+        // FIXED: Changed from countByIsActiveTrue() to countByActiveTrue()
+        long totalItems = medicineRepository.countByActiveTrue();
         Long totalQuantity = medicineRepository.sumStockQuantity();
 
         // Calculate total value (simplified - would need actual stock value calculation)
@@ -156,7 +159,7 @@ public class ReportService {
         // Get low stock items
         List<Medicine> lowStockItems =
                 medicineRepository.findLowStockItems(
-                                org.springframework.data.domain.PageRequest.of(0, 50))
+                                PageRequest.of(0, 50))
                         .getContent();
 
         List<StockSummary.StockItem> lowStockItemResponses = lowStockItems.stream()
@@ -174,7 +177,7 @@ public class ReportService {
         // Get out of stock items (stock = 0)
         List<Medicine> outOfStockItems =
                 medicineRepository.searchMedicines(null, null,
-                                org.springframework.data.domain.PageRequest.of(0, 50)).getContent()
+                                PageRequest.of(0, 50)).getContent()
                         .stream()
                         .filter(medicine -> medicine.getStockQuantity() == 0)
                         .collect(Collectors.toList());
@@ -194,7 +197,7 @@ public class ReportService {
         LocalDate expiryThreshold = LocalDate.now().plusDays(90);
         List<Medicine> expiringItems =
                 medicineRepository.findExpiringItems(expiryThreshold,
-                        org.springframework.data.domain.PageRequest.of(0, 50)).getContent();
+                        PageRequest.of(0, 50)).getContent();
 
         List<StockSummary.StockItem> expiringItemResponses = expiringItems.stream()
                 .map(medicine -> StockSummary.StockItem.builder()
@@ -359,7 +362,7 @@ public class ReportService {
 
         List<Sale> sales = saleRepository.findSalesByCriteria(
                 startDateTime, endDateTime, null, null,
-                org.springframework.data.domain.PageRequest.of(0, Integer.MAX_VALUE)).getContent();
+                PageRequest.of(0, Integer.MAX_VALUE)).getContent();
 
         return sales.stream()
                 .map(Sale::getTotal)
