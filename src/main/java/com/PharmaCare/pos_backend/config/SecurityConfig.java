@@ -18,7 +18,6 @@ import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
 
 import java.util.Arrays;
-import java.util.List;
 
 @Configuration
 @EnableWebSecurity
@@ -28,33 +27,6 @@ public class SecurityConfig {
 
     private final JwtAuthenticationFilter jwtAuthenticationFilter;
 
-    // List of public endpoints that don't require authentication
-    private static final String[] PUBLIC_ENDPOINTS = {
-            // Auth endpoints
-            "/api/auth/**",
-
-            // Public API endpoints (if any)
-            "/api/public/**",
-
-            // Swagger/OpenAPI documentation
-            "/swagger-ui/**",
-            "/v3/api-docs/**",
-            "/api-docs/**",
-            "/swagger-resources/**",
-            "/webjars/**",
-
-            // Health check endpoints
-            "/actuator/health",
-            "/health",
-            "/",
-
-            // Error pages
-            "/error",
-
-            // Favicon
-            "/favicon.ico"
-    };
-
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
@@ -63,54 +35,16 @@ public class SecurityConfig {
                 .sessionManagement(session -> session
                         .sessionCreationPolicy(SessionCreationPolicy.STATELESS))
                 .authorizeHttpRequests(auth -> auth
-                        // Public endpoints
-                        .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
+                        // Authentication endpoints - NO authentication required
+                        .requestMatchers("/api/auth/**").permitAll()
 
-                        // Medicine related endpoints
-                        .requestMatchers("/medicines/**").authenticated()
-                        .requestMatchers("/api/medicines/**").authenticated()
+                        // Documentation endpoints
+                        .requestMatchers("/swagger-ui/**", "/v3/api-docs/**").permitAll()
 
-                        // Sales endpoints
-                        .requestMatchers("/sales/**").authenticated()
-                        .requestMatchers("/api/sales/**").authenticated()
+                        // Test endpoint
+                        .requestMatchers("/api/test/**").permitAll()
 
-                        // Prescription endpoints
-                        .requestMatchers("/prescriptions/**").authenticated()
-                        .requestMatchers("/api/prescriptions/**").authenticated()
-
-                        // Stock endpoints
-                        .requestMatchers("/stock/**").authenticated()
-                        .requestMatchers("/api/stock/**").authenticated()
-
-                        // Expense endpoints
-                        .requestMatchers("/expenses/**").authenticated()
-                        .requestMatchers("/api/expenses/**").authenticated()
-
-                        // Category endpoints
-                        .requestMatchers("/categories/**").authenticated()
-                        .requestMatchers("/api/categories/**").authenticated()
-
-                        // User management endpoints
-                        .requestMatchers("/users/**").hasRole("ADMIN")
-                        .requestMatchers("/api/users/**").hasRole("ADMIN")
-
-                        // Customer endpoints
-                        .requestMatchers("/customers/**").authenticated()
-                        .requestMatchers("/api/customers/**").authenticated()
-
-                        // Supplier endpoints
-                        .requestMatchers("/suppliers/**").authenticated()
-                        .requestMatchers("/api/suppliers/**").authenticated()
-
-                        // Reports endpoints
-                        .requestMatchers("/reports/**").authenticated()
-                        .requestMatchers("/api/reports/**").authenticated()
-
-                        // Dashboard endpoints
-                        .requestMatchers("/dashboard/**").authenticated()
-                        .requestMatchers("/api/dashboard/**").authenticated()
-
-                        // All other requests require authentication
+                        // ALL other endpoints require authentication
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
 
@@ -120,20 +54,14 @@ public class SecurityConfig {
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
-
-        // Allow specific origins (your frontend URLs)
         configuration.setAllowedOrigins(Arrays.asList(
                 "https://pharmacares.netlify.app",
-                "http://localhost:3000",  // For local development
-                "http://localhost:5173"   // For Vite dev server
+                "http://localhost:3000",
+                "http://localhost:5173"
         ));
-
-        // Allow all HTTP methods
         configuration.setAllowedMethods(Arrays.asList(
                 "GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"
         ));
-
-        // Allow specific headers
         configuration.setAllowedHeaders(Arrays.asList(
                 "Authorization",
                 "Content-Type",
@@ -141,22 +69,13 @@ public class SecurityConfig {
                 "Accept",
                 "Origin",
                 "Access-Control-Request-Method",
-                "Access-Control-Request-Headers",
-                "Cache-Control"
+                "Access-Control-Request-Headers"
         ));
-
-        // Expose headers to the client
         configuration.setExposedHeaders(Arrays.asList(
                 "Authorization",
-                "Content-Type",
-                "Access-Control-Allow-Origin",
-                "Access-Control-Allow-Credentials"
+                "Content-Type"
         ));
-
-        // Allow credentials (cookies, authorization headers)
         configuration.setAllowCredentials(true);
-
-        // Cache preflight response for 1 hour (3600 seconds)
         configuration.setMaxAge(3600L);
 
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
