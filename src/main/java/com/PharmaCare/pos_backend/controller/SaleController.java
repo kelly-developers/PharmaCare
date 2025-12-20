@@ -22,7 +22,7 @@ import java.time.LocalDate;
 import java.util.UUID;
 
 @RestController
-@RequestMapping("/api/v1/sales")
+@RequestMapping("/api/sales")
 @RequiredArgsConstructor
 public class SaleController {
 

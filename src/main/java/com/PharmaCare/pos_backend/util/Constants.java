@@ -7,8 +7,8 @@ public class Constants {
     }
 
     // API Constants
-    public static final String API_VERSION = "v1";
-    public static final String API_BASE_PATH = "/api/" + API_VERSION;
+//    public static final String API_VERSION = "v1";
+    public static final String API_BASE_PATH = "/api/";
 
     // Security Constants
     public static final long JWT_EXPIRATION = 86400000; // 24 hours in milliseconds
