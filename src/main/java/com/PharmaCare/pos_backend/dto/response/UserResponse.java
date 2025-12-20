@@ -1,7 +1,7 @@
 package com.PharmaCare.pos_backend.dto.response;
 
-
 import com.PharmaCare.pos_backend.enums.Role;
+import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.AllArgsConstructor;
 import lombok.Builder;
 import lombok.Data;
@@ -14,6 +14,7 @@ import java.util.UUID;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
+@JsonInclude(JsonInclude.Include.NON_NULL)
 public class UserResponse {
     private UUID id;
     private String name;
@@ -23,4 +24,16 @@ public class UserResponse {
     private boolean isActive;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
+
+    // Add safe toString() to prevent recursion
+    @Override
+    public String toString() {
+        return "UserResponse{" +
+                "id=" + id +
+                ", name='" + name + '\'' +
+                ", email='" + email + '\'' +
+                ", role=" + role +
+                ", isActive=" + isActive +
+                '}';
+    }
 }

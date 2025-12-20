@@ -56,7 +56,6 @@ public class UserService {
 
     @Transactional
     public UserResponse createUser(UserRequest request) {
-        // Check if email already exists
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new ApiException("Email already registered", HttpStatus.BAD_REQUEST);
         }
@@ -81,7 +80,6 @@ public class UserService {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", id));
 
-        // Check if email is being changed
         if (!user.getEmail().equals(request.getEmail()) &&
                 userRepository.existsByEmail(request.getEmail())) {
             throw new ApiException("Email already registered", HttpStatus.BAD_REQUEST);
@@ -169,13 +167,15 @@ public class UserService {
     }
 
     public UserResponse mapToUserResponse(User user) {
+        if (user == null) return null;
+
         return UserResponse.builder()
                 .id(user.getId())
                 .name(user.getName())
                 .email(user.getEmail())
                 .role(user.getRole())
                 .phone(user.getPhone())
-                .isActive(user.isEnabled()) // Use isEnabled() method
+                .isActive(user.isEnabled())
                 .createdAt(user.getCreatedAt())
                 .updatedAt(user.getUpdatedAt())
                 .build();

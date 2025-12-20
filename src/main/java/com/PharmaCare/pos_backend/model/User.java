@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.UUID;
 
 @Entity
-@Table(name = "users", schema = "patientcare") // Added schema
+@Table(name = "users", schema = "patientcare")
 @Getter
 @Setter
 @NoArgsConstructor
@@ -42,18 +42,18 @@ public class User implements UserDetails {
 
     private String phone;
 
-    @Column(name = "is_active") // Match column name
-    private boolean active = true; // Renamed from isActive to active
+    @Column(name = "is_active")
+    @Builder.Default
+    private boolean active = true;
 
     @CreationTimestamp
-    @Column(name = "created_at", updatable = false) // Match column name
+    @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
     @UpdateTimestamp
-    @Column(name = "updated_at") // Match column name
+    @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
-    // CRITICAL FIX: Add @Builder.Default annotation to collections
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
         return List.of(new SimpleGrantedAuthority("ROLE_" + role.name()));
@@ -84,13 +84,30 @@ public class User implements UserDetails {
         return active;
     }
 
-    // Add getter for compatibility
-    public boolean getIsActive() {
+    // REMOVE THESE METHODS - They cause ambiguity!
+    // public boolean getIsActive() {
+    //     return active;
+    // }
+    //
+    // public void setIsActive(boolean active) {
+    //     this.active = active;
+    // }
+
+    // Add this method if you need to access it as isActive
+    @Transient  // This tells JPA not to map it to database
+    public boolean isActive() {
         return active;
     }
 
-    // Add setter for compatibility
-    public void setIsActive(boolean active) {
-        this.active = active;
+    // Safe toString() to prevent recursion
+    @Override
+    public String toString() {
+        return "User{" +
+                "id=" + id +
+                ", name='" + name + '\'' +
+                ", email='" + email + '\'' +
+                ", role=" + role +
+                ", active=" + active +
+                '}';
     }
 }

@@ -41,25 +41,22 @@ public class AuthService {
     public AuthResponse register(RegisterRequest request) {
         log.info("Registering new user with email: {}", request.getEmail());
 
-        // Check if user already exists
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new ApiException("Email already registered", HttpStatus.BAD_REQUEST);
         }
 
-        // Create new user
         User user = User.builder()
                 .name(request.getName())
                 .email(request.getEmail())
                 .password(passwordEncoder.encode(request.getPassword()))
                 .role(request.getRole())
                 .phone(request.getPhone())
-                .active(true) // Use active instead of isActive
+                .active(true)
                 .build();
 
         User savedUser = userRepository.save(user);
         log.info("User registered successfully with ID: {}", savedUser.getId());
 
-        // Generate tokens
         String token = jwtTokenProvider.generateToken(savedUser);
         String refreshToken = jwtTokenProvider.generateRefreshToken(savedUser);
 
@@ -71,83 +68,71 @@ public class AuthService {
     }
 
     public AuthResponse login(LoginRequest request) {
-        log.info("=== LOGIN ATTEMPT START ===");
+        log.info("=== LOGIN ATTEMPT ===");
         log.info("Email: {}", request.getEmail());
 
-        // Check if user exists in database
-        log.debug("1. Checking database for user...");
-        Optional<User> optionalUser = userRepository.findByEmail(request.getEmail());
-
-        if (optionalUser.isEmpty()) {
-            log.error("❌ User not found in database: {}", request.getEmail());
-            throw new UnauthorizedException("Invalid email or password");
-        }
-
-        User dbUser = optionalUser.get();
-        log.debug("✅ User found in database:");
-        log.debug("   - Email: {}", dbUser.getEmail());
-        log.debug("   - Name: {}", dbUser.getName());
-        log.debug("   - Role: {}", dbUser.getRole());
-        log.debug("   - Active: {}", dbUser.isEnabled());
-        log.debug("   - Password hash length: {}", dbUser.getPassword().length());
-        log.debug("   - Password hash prefix: {}", dbUser.getPassword().substring(0, 30));
-
-        // Manual password check
-        log.debug("2. Manual password check...");
-        boolean passwordMatches = passwordEncoder.matches(request.getPassword(), dbUser.getPassword());
-        log.debug("   Password matches hash: {}", passwordMatches);
-
-        if (!passwordMatches) {
-            log.error("❌ Password mismatch for user: {}", request.getEmail());
-            throw new UnauthorizedException("Invalid email or password");
-        }
-
-        // Check if user is enabled
-        if (!dbUser.isEnabled()) {
-            log.error("❌ User account is disabled: {}", request.getEmail());
-            throw new ApiException("Account is disabled", HttpStatus.UNAUTHORIZED);
-        }
-
         try {
-            log.debug("3. Attempting Spring Security authentication...");
-
-            // Load UserDetails properly
-            UserDetails userDetails = userDetailsService.loadUserByUsername(request.getEmail());
-
-            Authentication authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(userDetails, request.getPassword(), userDetails.getAuthorities())
-            );
-
-            log.debug("✅ Authentication successful!");
-            SecurityContextHolder.getContext().setAuthentication(authentication);
-
-            // CRITICAL FIX: Get user from database instead of casting from authentication
-            User authenticatedUser = userRepository.findByEmail(request.getEmail())
+            // Direct database check first
+            User user = userRepository.findByEmail(request.getEmail())
                     .orElseThrow(() -> new UnauthorizedException("Invalid email or password"));
 
-            log.debug("   Authenticated user: {}", authenticatedUser.getEmail());
-            log.debug("   User authorities: {}", authenticatedUser.getAuthorities());
+            // Check password
+            if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+                throw new UnauthorizedException("Invalid email or password");
+            }
+
+            // Check if user is enabled
+            if (!user.isEnabled()) {
+                throw new ApiException("Account is disabled", HttpStatus.UNAUTHORIZED);
+            }
+
+            // SIMPLIFIED: Skip authenticationManager to avoid recursion
+            // Just load user details and generate token
+            UserDetails userDetails = userDetailsService.loadUserByUsername(request.getEmail());
+
+            // Set authentication manually
+            Authentication authentication = new UsernamePasswordAuthenticationToken(
+                    userDetails,
+                    null,
+                    userDetails.getAuthorities()
+            );
+            SecurityContextHolder.getContext().setAuthentication(authentication);
 
             // Generate tokens
-            String token = jwtTokenProvider.generateToken(authenticatedUser);
-            String refreshToken = jwtTokenProvider.generateRefreshToken(authenticatedUser);
+            String token = jwtTokenProvider.generateToken(user);
+            String refreshToken = jwtTokenProvider.generateRefreshToken(user);
 
-            log.debug("4. Tokens generated:");
-            log.debug("   Token length: {}", token.length());
-            log.debug("   Refresh token length: {}", refreshToken.length());
+            log.info("✅ LOGIN SUCCESSFUL: {}", user.getEmail());
 
-            log.info("✅ LOGIN SUCCESSFUL: {}", authenticatedUser.getEmail());
-            log.info("=== LOGIN ATTEMPT END ===");
+            // Use simplified user response creation
+            UserResponse userResponse = createUserResponse(user);
 
             return AuthResponse.builder()
-                    .user(userService.mapToUserResponse(authenticatedUser))
+                    .user(userResponse)
                     .token(token)
                     .refreshToken(refreshToken)
                     .build();
+
         } catch (Exception e) {
-            log.error("❌ Authentication failed:", e);
+            log.error("Login error: {}", e.getMessage());
             throw new UnauthorizedException("Invalid email or password");
         }
+    }
+
+    // Helper method to avoid circular dependency with UserService
+    private UserResponse createUserResponse(User user) {
+        if (user == null) return null;
+
+        return UserResponse.builder()
+                .id(user.getId())
+                .name(user.getName())
+                .email(user.getEmail())
+                .role(user.getRole())
+                .phone(user.getPhone())
+                .isActive(user.isEnabled())
+                .createdAt(user.getCreatedAt())
+                .updatedAt(user.getUpdatedAt())
+                .build();
     }
 
     public void logout() {
@@ -184,13 +169,11 @@ public class AuthService {
         User user = userRepository.findById(java.util.UUID.fromString(userId))
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
 
-        // Verify current password
         if (!passwordEncoder.matches(request.getCurrentPassword(), user.getPassword())) {
             log.error("Current password incorrect for user ID: {}", userId);
             throw new ApiException("Current password is incorrect", HttpStatus.BAD_REQUEST);
         }
 
-        // Update password
         user.setPassword(passwordEncoder.encode(request.getNewPassword()));
         userRepository.save(user);
 
