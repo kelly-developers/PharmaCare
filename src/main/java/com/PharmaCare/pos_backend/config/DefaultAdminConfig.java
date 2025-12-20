@@ -8,9 +8,9 @@ import org.springframework.stereotype.Component;
 @ConfigurationProperties(prefix = "admin.default")
 @Data
 public class DefaultAdminConfig {
-    private String email;
-    private String password;
-    private String name;
-    private String phone;
+    private String email = "kellynyachiro@gmail.com";
+    private String password = "Kelly@40125507";  // Set default value
+    private String name = "System Administrator";
+    private String phone = "+254700000000";
     private boolean enabled = true;
 }

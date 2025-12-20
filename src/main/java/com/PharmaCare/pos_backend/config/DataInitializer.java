@@ -22,32 +22,56 @@ public class DataInitializer {
     @Bean
     CommandLineRunner initDatabase() {
         return args -> {
-            createDefaultAdmin();
+            createOrUpdateDefaultAdmin();
             logDefaultAdminCredentials();
         };
     }
 
-    private void createDefaultAdmin() {
+    private void createOrUpdateDefaultAdmin() {
         String email = defaultAdminConfig.getEmail();
+        String rawPassword = defaultAdminConfig.getPassword();
+        String encodedPassword = passwordEncoder.encode(rawPassword);
+
+        log.info("=== ADMIN SETUP ===");
+        log.info("Email from config: {}", email);
+        log.info("Password from config: {}", rawPassword);
+        log.info("Encoded password: {}", encodedPassword);
+        log.info("==================");
 
         // Check if admin already exists
-        if (userRepository.findByEmail(email).isEmpty()) {
-            User admin = User.builder()
-                    .name(defaultAdminConfig.getName() != null ?
-                            defaultAdminConfig.getName() : "System Administrator")
-                    .email(email)
-                    .password(passwordEncoder.encode(defaultAdminConfig.getPassword()))
-                    .role(Role.ADMIN)
-                    .phone(defaultAdminConfig.getPhone() != null ?
-                            defaultAdminConfig.getPhone() : "+254700000000")
-                    .isActive(defaultAdminConfig.isEnabled())
-                    .build();
+        userRepository.findByEmail(email).ifPresentOrElse(
+                existingUser -> {
+                    // Update existing admin with correct password
+                    log.info("Admin user with email {} already exists. Updating password...", email);
 
-            userRepository.save(admin);
-            log.info("Default admin user created with email: {}", email);
-        } else {
-            log.info("Admin user with email {} already exists", email);
-        }
+                    // Check if password needs to be updated
+                    if (!passwordEncoder.matches(rawPassword, existingUser.getPassword())) {
+                        existingUser.setPassword(encodedPassword);
+                        existingUser.setActive(true);
+                        existingUser.setName(defaultAdminConfig.getName());
+                        existingUser.setPhone(defaultAdminConfig.getPhone());
+                        userRepository.save(existingUser);
+                        log.info("✅ Admin password updated successfully!");
+                    } else {
+                        log.info("Admin password is already correct.");
+                    }
+                },
+                () -> {
+                    // Create new admin
+                    log.info("Creating new admin user with email: {}", email);
+                    User admin = User.builder()
+                            .name(defaultAdminConfig.getName())
+                            .email(email)
+                            .password(encodedPassword)
+                            .role(Role.ADMIN)
+                            .phone(defaultAdminConfig.getPhone())
+                            .isActive(defaultAdminConfig.isEnabled())
+                            .build();
+
+                    userRepository.save(admin);
+                    log.info("✅ Default admin user created with email: {}", email);
+                }
+        );
     }
 
     private void logDefaultAdminCredentials() {
@@ -56,6 +80,7 @@ public class DataInitializer {
         log.info("Email: {}", defaultAdminConfig.getEmail());
         log.info("Password: {}", defaultAdminConfig.getPassword());
         log.info("Role: ADMIN");
+        log.info("Active: {}", defaultAdminConfig.isEnabled());
         log.info("=========================================");
     }
 }
