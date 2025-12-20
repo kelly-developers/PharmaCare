@@ -8,7 +8,7 @@ import com.PharmaCare.pos_backend.dto.response.StockMovementResponse;
 import com.PharmaCare.pos_backend.enums.StockMovementType;
 import com.PharmaCare.pos_backend.service.StockService;
 import jakarta.validation.Valid;
-import lombok.RequiredArgsConstructor;
+import lombok.*;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
@@ -16,6 +16,8 @@ import org.springframework.web.bind.annotation.*;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -47,6 +49,35 @@ public class StockController {
 
         StockMovementResponse movement = stockService.recordStockLoss(request);
         return ResponseEntity.ok(ApiResponse.success(movement, "Stock loss recorded successfully"));
+    }
+
+    @GetMapping("/monthly")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    public ResponseEntity<ApiResponse<List<MonthlyStockSummary>>> getMonthlyStockSummary(
+            @RequestParam(required = false) UUID medicineId) {
+
+        // First, let's just return a simple response to test
+        List<MonthlyStockSummary> summary = new ArrayList<>();
+        summary.add(MonthlyStockSummary.builder()
+                .month("December 2025")
+                .incoming(100)
+                .outgoing(50)
+                .netChange(50)
+                .build());
+
+        return ResponseEntity.ok(ApiResponse.success(summary, "Monthly stock summary"));
+    }
+
+    // Create this DTO class
+    @Data
+    @Builder
+    @NoArgsConstructor
+    @AllArgsConstructor
+    class MonthlyStockSummary {
+        private String month;
+        private int incoming;
+        private int outgoing;
+        private int netChange;
     }
 
     @PostMapping("/adjustment")
