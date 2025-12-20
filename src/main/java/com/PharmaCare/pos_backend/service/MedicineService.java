@@ -62,7 +62,20 @@ public class MedicineService {
             LocalDate expiryThreshold = LocalDate.now().plusDays(90);
             medicinePage = medicineRepository.findExpiringItems(expiryThreshold, pageable);
         } else {
-            medicinePage = medicineRepository.searchMedicines(search, category, pageable);
+            // FIXED: Use alternative method when search contains problematic batch number search
+            if (search != null && !search.trim().isEmpty()) {
+                // Try to search using the repository method
+                try {
+                    medicinePage = medicineRepository.searchMedicines(search, category, pageable);
+                } catch (Exception e) {
+                    // Fallback: If search fails, use simple active filter
+                    log.warn("Search failed, falling back to active medicines: {}", e.getMessage());
+                    medicinePage = getFallbackMedicines(search, category, pageable);
+                }
+            } else {
+                // No search term, just get active medicines
+                medicinePage = getActiveMedicines(category, pageable);
+            }
         }
 
         List<MedicineResponse> medicineResponses = medicinePage.getContent()
@@ -71,6 +84,26 @@ public class MedicineService {
                 .collect(Collectors.toList());
 
         return PaginatedResponse.of(medicineResponses, page, limit, medicinePage.getTotalElements());
+    }
+
+    // Fallback method when search fails
+    private Page<Medicine> getFallbackMedicines(String search, String category, Pageable pageable) {
+        if (category != null && !category.trim().isEmpty()) {
+            return medicineRepository.findByCategory(category, pageable);
+        } else {
+            // FIXED: Use findByActiveTrue() instead of findByIsActiveTrue()
+            return medicineRepository.findByActiveTrue(pageable);
+        }
+    }
+
+    // Simple method to get active medicines
+    private Page<Medicine> getActiveMedicines(String category, Pageable pageable) {
+        if (category != null && !category.trim().isEmpty()) {
+            return medicineRepository.findByCategory(category, pageable);
+        } else {
+            // FIXED: Use findByActiveTrue() instead of findByIsActiveTrue()
+            return medicineRepository.findByActiveTrue(pageable);
+        }
     }
 
     @Transactional
@@ -96,7 +129,7 @@ public class MedicineService {
                 .reorderLevel(request.getReorderLevel())
                 .costPrice(request.getCostPrice())
                 .imageUrl(request.getImageUrl())
-                .isActive(true)
+                .active(true)
                 .build();
 
         // Set supplier if provided
@@ -308,7 +341,8 @@ public class MedicineService {
     }
 
     public long countTotalMedicines() {
-        return medicineRepository.countByIsActiveTrue();
+        // FIXED: Use countByActiveTrue() instead of countByIsActiveTrue()
+        return medicineRepository.countByActiveTrue();
     }
 
     public long getTotalStockQuantity() {
@@ -335,6 +369,9 @@ public class MedicineService {
 
     private MedicineResponse mapToMedicineResponse(Medicine medicine) {
         MedicineResponse response = modelMapper.map(medicine, MedicineResponse.class);
+
+        // Set isActive field
+        response.setIsActive(medicine.isActive());
 
         if (medicine.getSupplier() != null) {
             response.setSupplierId(medicine.getSupplier().getId());

@@ -20,32 +20,37 @@ public interface MedicineRepository extends JpaRepository<Medicine, UUID> {
 
     Page<Medicine> findByCategory(String category, Pageable pageable);
 
+    // FIXED: Use m.active instead of m.isActive and handle batchNumber differently
     @Query("SELECT m FROM Medicine m WHERE " +
             "(:search IS NULL OR LOWER(m.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
             "LOWER(m.genericName) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
-            "LOWER(m.batchNumber) LIKE LOWER(CONCAT('%', :search, '%'))) AND " +
+            "m.batchNumber LIKE CONCAT('%', :search, '%')) AND " +
             "(:category IS NULL OR m.category = :category) AND " +
-            "m.isActive = true")
+            "m.active = true")
     Page<Medicine> searchMedicines(@Param("search") String search,
                                    @Param("category") String category,
                                    Pageable pageable);
 
-    @Query("SELECT m FROM Medicine m WHERE m.stockQuantity <= m.reorderLevel AND m.isActive = true")
+    @Query("SELECT m FROM Medicine m WHERE m.stockQuantity <= m.reorderLevel AND m.active = true")
     Page<Medicine> findLowStockItems(Pageable pageable);
 
-    @Query("SELECT m FROM Medicine m WHERE m.expiryDate <= :expiryThreshold AND m.isActive = true")
+    @Query("SELECT m FROM Medicine m WHERE m.expiryDate <= :expiryThreshold AND m.active = true")
     Page<Medicine> findExpiringItems(@Param("expiryThreshold") LocalDate expiryThreshold, Pageable pageable);
 
-    @Query("SELECT DISTINCT m.category FROM Medicine m WHERE m.isActive = true")
+    @Query("SELECT DISTINCT m.category FROM Medicine m WHERE m.active = true")
     List<String> findAllCategories();
 
-    long countByIsActiveTrue();
+    long countByActiveTrue(); // Correct method name for boolean field "active"
 
-    @Query("SELECT SUM(m.stockQuantity) FROM Medicine m WHERE m.isActive = true")
+    @Query("SELECT SUM(m.stockQuantity) FROM Medicine m WHERE m.active = true")
     Long sumStockQuantity();
 
-    @Query("SELECT m.category, COUNT(m) as count FROM Medicine m WHERE m.isActive = true GROUP BY m.category")
+    @Query("SELECT m.category, COUNT(m) as count FROM Medicine m WHERE m.active = true GROUP BY m.category")
     List<Object[]> countByCategory();
 
-    List<Medicine> findBySupplierIdAndIsActiveTrue(UUID supplierId);
+    List<Medicine> findBySupplierIdAndActiveTrue(UUID supplierId);
+
+    // CORRECTED: Added missing methods with proper naming for "active" field
+    Page<Medicine> findByActiveTrue(Pageable pageable);
+    List<Medicine> findByActiveTrue();
 }

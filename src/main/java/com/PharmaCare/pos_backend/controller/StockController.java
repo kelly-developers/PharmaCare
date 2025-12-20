@@ -14,6 +14,7 @@ import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.UUID;
 
@@ -31,10 +32,10 @@ public class StockController {
             @RequestParam(defaultValue = "20") int limit,
             @RequestParam(required = false) UUID medicineId,
             @RequestParam(required = false) StockMovementType type,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime startDate,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) LocalDateTime endDate) {
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate startDate,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
 
-        PaginatedResponse<StockMovementResponse> movements = stockService.getStockMovements(
+        PaginatedResponse<StockMovementResponse> movements = stockService.getStockMovementsWithDates(
                 page, limit, medicineId, type, startDate, endDate);
         return ResponseEntity.ok(ApiResponse.success(movements));
     }
@@ -64,8 +65,9 @@ public class StockController {
             @RequestParam(defaultValue = "1") int page,
             @RequestParam(defaultValue = "20") int limit) {
 
+        // Use the simple method without dates
         PaginatedResponse<StockMovementResponse> movements = stockService.getStockMovements(
-                page, limit, medicineId, null, null, null);
+                page, limit, medicineId, null);
         return ResponseEntity.ok(ApiResponse.success(movements));
     }
 

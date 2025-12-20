@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.UUID;
 
 @Entity
-@Table(name = "medicines")
+@Table(name = "medicines", schema = "patientcare")  // Added schema
 @Getter
 @Setter
 @NoArgsConstructor
@@ -56,18 +56,20 @@ public class Medicine {
 
     private String imageUrl;
 
+    @Column(name = "is_active")
     @Builder.Default
-    private boolean isActive = true;
+    private boolean active = true;
 
     @OneToMany(mappedBy = "medicine", cascade = CascadeType.ALL, orphanRemoval = true)
     @Builder.Default
     private List<MedicineUnit> units = new ArrayList<>();
 
     @CreationTimestamp
-    @Column(updatable = false)
+    @Column(name = "created_at", updatable = false)
     private LocalDateTime createdAt;
 
     @UpdateTimestamp
+    @Column(name = "updated_at")
     private LocalDateTime updatedAt;
 
     @PrePersist
@@ -77,6 +79,27 @@ public class Medicine {
             throw new IllegalArgumentException("Medicine has expired");
         }
     }
-}
 
-///
+    // Getter for compatibility
+    public boolean isActive() {
+        return active;
+    }
+
+    // Setter for compatibility
+    public void setIsActive(boolean active) {
+        this.active = active;
+    }
+
+    // Safe toString() to prevent recursion
+    @Override
+    public String toString() {
+        return "Medicine{" +
+                "id=" + id +
+                ", name='" + name + '\'' +
+                ", category='" + category + '\'' +
+                ", batchNumber='" + batchNumber + '\'' +
+                ", stockQuantity=" + stockQuantity +
+                ", active=" + active +
+                '}';
+    }
+}

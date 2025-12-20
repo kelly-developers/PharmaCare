@@ -25,6 +25,7 @@ import org.springframework.data.domain.Sort;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -40,10 +41,13 @@ public class StockService {
     private final UserRepository userRepository;
     private final ModelMapper modelMapper;
 
-    public PaginatedResponse<StockMovementResponse> getStockMovements(int page, int limit, UUID medicineId,
-                                                                      StockMovementType type,
-                                                                      LocalDateTime startDate,
-                                                                      LocalDateTime endDate) {
+    // Rename one of the methods to avoid ambiguity
+    public PaginatedResponse<StockMovementResponse> getStockMovementsWithDates(
+            int page, int limit, UUID medicineId,
+            StockMovementType type,
+            LocalDate startDate,
+            LocalDate endDate) {
+
         Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("createdAt").descending());
 
         Page<StockMovement> movementsPage = stockMovementRepository.findStockMovements(
@@ -55,6 +59,27 @@ public class StockService {
                 .collect(Collectors.toList());
 
         return PaginatedResponse.of(movementResponses, page, limit, movementsPage.getTotalElements());
+    }
+
+    // Rename the other method
+    public PaginatedResponse<StockMovementResponse> getStockMovementsWithDateTimes(
+            int page, int limit, UUID medicineId,
+            StockMovementType type,
+            LocalDateTime startDateTime,
+            LocalDateTime endDateTime) {
+
+        // Convert LocalDateTime to LocalDate
+        LocalDate startDate = startDateTime != null ? startDateTime.toLocalDate() : null;
+        LocalDate endDate = endDateTime != null ? endDateTime.toLocalDate() : null;
+
+        return getStockMovementsWithDates(page, limit, medicineId, type, startDate, endDate);
+    }
+
+    // Add a simpler method for when dates are not needed
+    public PaginatedResponse<StockMovementResponse> getStockMovements(
+            int page, int limit, UUID medicineId, StockMovementType type) {
+
+        return getStockMovementsWithDates(page, limit, medicineId, type, null, null);
     }
 
     @Transactional
