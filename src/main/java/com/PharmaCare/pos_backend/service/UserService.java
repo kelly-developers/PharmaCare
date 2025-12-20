@@ -17,6 +17,7 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
@@ -63,10 +64,10 @@ public class UserService {
         User user = User.builder()
                 .name(request.getName())
                 .email(request.getEmail())
-                .password(passwordEncoder.encode("defaultPassword123")) // Default password
+                .password(passwordEncoder.encode("defaultPassword123"))
                 .role(request.getRole())
                 .phone(request.getPhone())
-                .isActive(request.getIsActive() != null ? request.getIsActive() : true)
+                .active(request.getIsActive() != null ? request.getIsActive() : true)
                 .build();
 
         User savedUser = userRepository.save(user);
@@ -80,7 +81,7 @@ public class UserService {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", id));
 
-        // Check if email is being changed and if new email already exists
+        // Check if email is being changed
         if (!user.getEmail().equals(request.getEmail()) &&
                 userRepository.existsByEmail(request.getEmail())) {
             throw new ApiException("Email already registered", HttpStatus.BAD_REQUEST);
@@ -106,7 +107,6 @@ public class UserService {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", id));
 
-        // Soft delete - mark as inactive
         user.setActive(false);
         userRepository.save(user);
 
@@ -133,7 +133,6 @@ public class UserService {
     public UserResponse updateCurrentUserProfile(UserRequest request) {
         User currentUser = getCurrentUser();
 
-        // Users can't change their role or active status themselves
         currentUser.setName(request.getName());
         if (request.getPhone() != null) {
             currentUser.setPhone(request.getPhone());
@@ -159,15 +158,26 @@ public class UserService {
     }
 
     public User getCurrentUser() {
-        Object principal = SecurityContextHolder.getContext().getAuthentication().getPrincipal();
-        if (principal instanceof User) {
-            return (User) principal;
-        } else {
+        Authentication authentication = SecurityContextHolder.getContext().getAuthentication();
+        if (authentication == null || !authentication.isAuthenticated()) {
             throw new UnauthorizedException("User not authenticated");
         }
+
+        String email = authentication.getName();
+        return userRepository.findByEmail(email)
+                .orElseThrow(() -> new UnauthorizedException("User not found"));
     }
 
     public UserResponse mapToUserResponse(User user) {
-        return modelMapper.map(user, UserResponse.class);
+        return UserResponse.builder()
+                .id(user.getId())
+                .name(user.getName())
+                .email(user.getEmail())
+                .role(user.getRole())
+                .phone(user.getPhone())
+                .isActive(user.isEnabled()) // Use isEnabled() method
+                .createdAt(user.getCreatedAt())
+                .updatedAt(user.getUpdatedAt())
+                .build();
     }
 }

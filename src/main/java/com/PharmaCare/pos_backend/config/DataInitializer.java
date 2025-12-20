@@ -33,43 +33,40 @@ public class DataInitializer {
         String encodedPassword = passwordEncoder.encode(rawPassword);
 
         log.info("=== ADMIN SETUP ===");
-        log.info("Email from config: {}", email);
-        log.info("Password from config: {}", rawPassword);
-        log.info("Encoded password: {}", encodedPassword);
+        log.info("Email: {}", email);
+        log.info("Raw Password: {}", rawPassword);
+        log.info("Encoded Password: {}", encodedPassword);
         log.info("==================");
 
-        // Check if admin already exists
         userRepository.findByEmail(email).ifPresentOrElse(
                 existingUser -> {
-                    // Update existing admin with correct password
-                    log.info("Admin user with email {} already exists. Updating password...", email);
+                    log.info("Admin user with email {} already exists", email);
 
-                    // Check if password needs to be updated
+                    // Always update password to ensure it's correct
                     if (!passwordEncoder.matches(rawPassword, existingUser.getPassword())) {
                         existingUser.setPassword(encodedPassword);
                         existingUser.setActive(true);
                         existingUser.setName(defaultAdminConfig.getName());
                         existingUser.setPhone(defaultAdminConfig.getPhone());
                         userRepository.save(existingUser);
-                        log.info("✅ Admin password updated successfully!");
+                        log.info("✅ Admin password updated!");
                     } else {
-                        log.info("Admin password is already correct.");
+                        log.info("Admin password is already correct");
                     }
                 },
                 () -> {
-                    // Create new admin
-                    log.info("Creating new admin user with email: {}", email);
+                    log.info("Creating new admin user...");
                     User admin = User.builder()
                             .name(defaultAdminConfig.getName())
                             .email(email)
                             .password(encodedPassword)
                             .role(Role.ADMIN)
                             .phone(defaultAdminConfig.getPhone())
-                            .isActive(defaultAdminConfig.isEnabled())
+                            .active(defaultAdminConfig.isEnabled())
                             .build();
 
                     userRepository.save(admin);
-                    log.info("✅ Default admin user created with email: {}", email);
+                    log.info("✅ Default admin user created");
                 }
         );
     }
@@ -79,6 +76,8 @@ public class DataInitializer {
         log.info("DEFAULT ADMIN CREDENTIALS:");
         log.info("Email: {}", defaultAdminConfig.getEmail());
         log.info("Password: {}", defaultAdminConfig.getPassword());
+        log.info("Name: {}", defaultAdminConfig.getName());
+        log.info("Phone: {}", defaultAdminConfig.getPhone());
         log.info("Role: ADMIN");
         log.info("Active: {}", defaultAdminConfig.isEnabled());
         log.info("=========================================");

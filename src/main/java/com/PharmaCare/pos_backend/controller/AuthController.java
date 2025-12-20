@@ -54,7 +54,7 @@ public class AuthController {
     @PostMapping("/change-password")
     public ResponseEntity<ApiResponse<Void>> changePassword(@Valid @RequestBody ChangePasswordRequest request) {
         UserResponse currentUser = authService.getCurrentUser();
-        authService.changePassword(currentUser.getId(), request);
+        authService.changePassword(currentUser.getId().toString(), request); // Pass ID as String
         return ResponseEntity.ok(ApiResponse.success(null, "Password changed successfully"));
     }
 
@@ -78,4 +78,3 @@ public class AuthController {
         return ResponseEntity.ok(ApiResponse.success(isValid));
     }
 }
-/////

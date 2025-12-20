@@ -15,7 +15,7 @@ import java.util.List;
 import java.util.UUID;
 
 @Entity
-@Table(name = "users")
+@Table(name = "users", schema = "patientcare") // Added schema
 @Getter
 @Setter
 @NoArgsConstructor
@@ -42,16 +42,18 @@ public class User implements UserDetails {
 
     private String phone;
 
-    @Builder.Default
-    private boolean isActive = true;
+    @Column(name = "is_active") // Match column name
+    private boolean active = true; // Renamed from isActive to active
 
     @CreationTimestamp
-    @Column(updatable = false)
+    @Column(name = "created_at", updatable = false) // Match column name
     private LocalDateTime createdAt;
 
     @UpdateTimestamp
+    @Column(name = "updated_at") // Match column name
     private LocalDateTime updatedAt;
 
+    // CRITICAL FIX: Add @Builder.Default annotation to collections
     @Override
     public Collection<? extends GrantedAuthority> getAuthorities() {
         return List.of(new SimpleGrantedAuthority("ROLE_" + role.name()));
@@ -79,6 +81,16 @@ public class User implements UserDetails {
 
     @Override
     public boolean isEnabled() {
-        return isActive;
+        return active;
+    }
+
+    // Add getter for compatibility
+    public boolean getIsActive() {
+        return active;
+    }
+
+    // Add setter for compatibility
+    public void setIsActive(boolean active) {
+        this.active = active;
     }
 }

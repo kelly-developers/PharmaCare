@@ -18,12 +18,12 @@ import org.springframework.security.authentication.AuthenticationManager;
 import org.springframework.security.authentication.UsernamePasswordAuthenticationToken;
 import org.springframework.security.core.Authentication;
 import org.springframework.security.core.context.SecurityContextHolder;
+import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.Optional;
-import java.util.UUID;
 
 @Service
 @RequiredArgsConstructor
@@ -35,6 +35,7 @@ public class AuthService {
     private final AuthenticationManager authenticationManager;
     private final JwtTokenProvider jwtTokenProvider;
     private final UserService userService;
+    private final CustomUserDetailsService userDetailsService;
 
     @Transactional
     public AuthResponse register(RegisterRequest request) {
@@ -52,7 +53,7 @@ public class AuthService {
                 .password(passwordEncoder.encode(request.getPassword()))
                 .role(request.getRole())
                 .phone(request.getPhone())
-                .isActive(true)
+                .active(true) // Use active instead of isActive
                 .build();
 
         User savedUser = userRepository.save(user);
@@ -73,7 +74,7 @@ public class AuthService {
         log.info("=== LOGIN ATTEMPT START ===");
         log.info("Email: {}", request.getEmail());
 
-        // DEBUG: Check if user exists in database
+        // Check if user exists in database
         log.debug("1. Checking database for user...");
         Optional<User> optionalUser = userRepository.findByEmail(request.getEmail());
 
@@ -91,19 +92,17 @@ public class AuthService {
         log.debug("   - Password hash length: {}", dbUser.getPassword().length());
         log.debug("   - Password hash prefix: {}", dbUser.getPassword().substring(0, 30));
 
-        // DEBUG: Manual password check
+        // Manual password check
         log.debug("2. Manual password check...");
         boolean passwordMatches = passwordEncoder.matches(request.getPassword(), dbUser.getPassword());
-        log.debug("   Password '{}' matches hash: {}", request.getPassword(), passwordMatches);
+        log.debug("   Password matches hash: {}", passwordMatches);
 
         if (!passwordMatches) {
             log.error("❌ Password mismatch for user: {}", request.getEmail());
-            log.debug("   Provided password: '{}'", request.getPassword());
-            log.debug("   Stored hash: {}", dbUser.getPassword());
             throw new UnauthorizedException("Invalid email or password");
         }
 
-        // DEBUG: Check if user is enabled
+        // Check if user is enabled
         if (!dbUser.isEnabled()) {
             log.error("❌ User account is disabled: {}", request.getEmail());
             throw new ApiException("Account is disabled", HttpStatus.UNAUTHORIZED);
@@ -111,38 +110,42 @@ public class AuthService {
 
         try {
             log.debug("3. Attempting Spring Security authentication...");
+
+            // Load UserDetails properly
+            UserDetails userDetails = userDetailsService.loadUserByUsername(request.getEmail());
+
             Authentication authentication = authenticationManager.authenticate(
-                    new UsernamePasswordAuthenticationToken(request.getEmail(), request.getPassword())
+                    new UsernamePasswordAuthenticationToken(userDetails, request.getPassword(), userDetails.getAuthorities())
             );
 
             log.debug("✅ Authentication successful!");
             SecurityContextHolder.getContext().setAuthentication(authentication);
 
-            User user = (User) authentication.getPrincipal();
-            log.debug("   Authenticated user: {}", user.getEmail());
-            log.debug("   User authorities: {}", user.getAuthorities());
+            // CRITICAL FIX: Get user from database instead of casting from authentication
+            User authenticatedUser = userRepository.findByEmail(request.getEmail())
+                    .orElseThrow(() -> new UnauthorizedException("Invalid email or password"));
+
+            log.debug("   Authenticated user: {}", authenticatedUser.getEmail());
+            log.debug("   User authorities: {}", authenticatedUser.getAuthorities());
 
             // Generate tokens
-            String token = jwtTokenProvider.generateToken(user);
-            String refreshToken = jwtTokenProvider.generateRefreshToken(user);
+            String token = jwtTokenProvider.generateToken(authenticatedUser);
+            String refreshToken = jwtTokenProvider.generateRefreshToken(authenticatedUser);
 
             log.debug("4. Tokens generated:");
             log.debug("   Token length: {}", token.length());
             log.debug("   Refresh token length: {}", refreshToken.length());
 
-            log.info("✅ LOGIN SUCCESSFUL: {}", user.getEmail());
+            log.info("✅ LOGIN SUCCESSFUL: {}", authenticatedUser.getEmail());
             log.info("=== LOGIN ATTEMPT END ===");
 
             return AuthResponse.builder()
-                    .user(userService.mapToUserResponse(user))
+                    .user(userService.mapToUserResponse(authenticatedUser))
                     .token(token)
                     .refreshToken(refreshToken)
                     .build();
         } catch (Exception e) {
-            log.error("❌ AuthenticationManager authentication failed:", e);
-            log.error("   Email: {}", request.getEmail());
-            log.error("   Exception type: {}", e.getClass().getName());
-            log.error("   Exception message: {}", e.getMessage());
+            log.error("❌ Authentication failed:", e);
             throw new UnauthorizedException("Invalid email or password");
         }
     }
@@ -175,10 +178,10 @@ public class AuthService {
     }
 
     @Transactional
-    public void changePassword(UUID userId, ChangePasswordRequest request) {
+    public void changePassword(String userId, ChangePasswordRequest request) {
         log.info("Changing password for user ID: {}", userId);
 
-        User user = userRepository.findById(userId)
+        User user = userRepository.findById(java.util.UUID.fromString(userId))
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", userId));
 
         // Verify current password
@@ -214,7 +217,10 @@ public class AuthService {
             throw new UnauthorizedException("User not authenticated");
         }
 
-        User user = (User) authentication.getPrincipal();
+        String email = authentication.getName();
+        User user = userRepository.findByEmail(email)
+                .orElseThrow(() -> new UnauthorizedException("User not found"));
+
         log.debug("Getting current user: {}", user.getEmail());
         return userService.mapToUserResponse(user);
     }
@@ -232,4 +238,4 @@ public class AuthService {
             return false;
         }
     }
-}//
+}
