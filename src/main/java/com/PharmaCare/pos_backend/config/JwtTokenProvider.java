@@ -23,10 +23,13 @@ public class JwtTokenProvider {
     private String secretKey;
 
     @Value("${application.security.jwt.expiration}")
-    private long jwtExpiration;
+    private long jwtExpiration;  // Make sure this is long
+
+    @Value("${application.security.jwt.refresh-secret}")
+    private String refreshSecretKey;  // Changed from refreshSecret to refreshSecretKey
 
     @Value("${application.security.jwt.refresh-expiration}")
-    private long refreshExpiration;
+    private long refreshExpiration;  // Make sure this is long
 
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
@@ -38,25 +41,22 @@ public class JwtTokenProvider {
     }
 
     public String generateToken(UserDetails userDetails) {
-        return generateToken(new HashMap<>(), userDetails);
-    }
-
-    public String generateToken(Map<String, Object> extraClaims, UserDetails userDetails) {
-        return buildToken(extraClaims, userDetails, jwtExpiration);
+        return generateToken(new HashMap<>(), userDetails, secretKey, jwtExpiration);
     }
 
     public String generateRefreshToken(UserDetails userDetails) {
-        return buildToken(new HashMap<>(), userDetails, refreshExpiration);
+        return generateToken(new HashMap<>(), userDetails, refreshSecretKey, refreshExpiration);
     }
 
-    private String buildToken(Map<String, Object> extraClaims, UserDetails userDetails, long expiration) {
+    private String generateToken(Map<String, Object> extraClaims, UserDetails userDetails,
+                                 String secret, long expiration) {
         return Jwts
                 .builder()
                 .setClaims(extraClaims)
                 .setSubject(userDetails.getUsername())
                 .setIssuedAt(new Date(System.currentTimeMillis()))
                 .setExpiration(new Date(System.currentTimeMillis() + expiration))
-                .signWith(getSignInKey(), SignatureAlgorithm.HS256)
+                .signWith(getSignInKey(secret), SignatureAlgorithm.HS256)
                 .compact();
     }
 
@@ -76,14 +76,14 @@ public class JwtTokenProvider {
     private Claims extractAllClaims(String token) {
         return Jwts
                 .parserBuilder()
-                .setSigningKey(getSignInKey())
+                .setSigningKey(getSignInKey(secretKey))
                 .build()
                 .parseClaimsJws(token)
                 .getBody();
     }
 
-    private Key getSignInKey() {
-        byte[] keyBytes = Decoders.BASE64.decode(secretKey);
+    private Key getSignInKey(String secret) {
+        byte[] keyBytes = Decoders.BASE64.decode(secret);
         return Keys.hmacShaKeyFor(keyBytes);
     }
 }
