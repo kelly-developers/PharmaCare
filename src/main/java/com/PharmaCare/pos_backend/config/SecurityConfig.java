@@ -66,50 +66,41 @@ public class SecurityConfig {
                         // Public endpoints
                         .requestMatchers(PUBLIC_ENDPOINTS).permitAll()
 
+                        // CRITICAL FIX: Update all requestMatchers to match /api/ prefix
                         // Medicine related endpoints
-                        .requestMatchers("/medicines/**").authenticated()
                         .requestMatchers("/api/medicines/**").authenticated()
 
                         // Sales endpoints
-                        .requestMatchers("/sales/**").authenticated()
                         .requestMatchers("/api/sales/**").authenticated()
 
                         // Prescription endpoints
-                        .requestMatchers("/prescriptions/**").authenticated()
                         .requestMatchers("/api/prescriptions/**").authenticated()
 
                         // Stock endpoints
-                        .requestMatchers("/stock/**").authenticated()
                         .requestMatchers("/api/stock/**").authenticated()
 
                         // Expense endpoints
-                        .requestMatchers("/expenses/**").authenticated()
                         .requestMatchers("/api/expenses/**").authenticated()
 
                         // Category endpoints
-                        .requestMatchers("/categories/**").authenticated()
                         .requestMatchers("/api/categories/**").authenticated()
 
                         // User management endpoints
-                        .requestMatchers("/users/**").hasRole("ADMIN")
                         .requestMatchers("/api/users/**").hasRole("ADMIN")
 
                         // Customer endpoints
-                        .requestMatchers("/customers/**").authenticated()
                         .requestMatchers("/api/customers/**").authenticated()
 
                         // Supplier endpoints
-                        .requestMatchers("/suppliers/**").authenticated()
                         .requestMatchers("/api/suppliers/**").authenticated()
 
                         // Reports endpoints
-                        .requestMatchers("/reports/**").authenticated()
                         .requestMatchers("/api/reports/**").authenticated()
 
                         // Dashboard endpoints
-                        .requestMatchers("/dashboard/**").authenticated()
                         .requestMatchers("/api/dashboard/**").authenticated()
 
+                        // Remove duplicate matchers without /api/ prefix
                         // All other requests require authentication
                         .anyRequest().authenticated())
                 .addFilterBefore(jwtAuthenticationFilter, UsernamePasswordAuthenticationFilter.class);
@@ -121,11 +112,13 @@ public class SecurityConfig {
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
 
-        // Allow specific origins (your frontend URLs)
+        // CRITICAL FIX: Add ALL your frontend URLs including Render if needed
         configuration.setAllowedOrigins(Arrays.asList(
-                "https://pharmacares.netlify.app",
-                "http://localhost:3000",  // For local development
-                "http://localhost:5173"   // For Vite dev server
+                "https://pharmacares.netlify.app",      // Your main frontend
+                "https://pharmacare-ywjs.onrender.com", // If you have another frontend
+                "http://localhost:3000",                // Local dev
+                "http://localhost:5173",                // Vite dev server
+                "http://localhost:8080"                 // Backend itself (for testing)
         ));
 
         // Allow all HTTP methods
