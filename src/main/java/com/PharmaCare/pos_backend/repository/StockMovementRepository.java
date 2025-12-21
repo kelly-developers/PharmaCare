@@ -20,21 +20,69 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
 
     Page<StockMovement> findByMedicine(Medicine medicine, Pageable pageable);
 
-    // FIXED: Remove native query and use JPQL with COALESCE approach
-    @Query("""
-        SELECT sm FROM StockMovement sm 
-        WHERE (COALESCE(:medicineId, sm.medicine.id) = sm.medicine.id) 
-        AND (COALESCE(:type, sm.type) = sm.type) 
-        AND (COALESCE(:startDate, '1900-01-01T00:00:00') <= sm.createdAt) 
-        AND (COALESCE(:endDate, '9999-12-31T23:59:59') >= sm.createdAt) 
-        ORDER BY sm.createdAt DESC
-    """)
-    Page<StockMovement> findStockMovementsWithFilters(
+    // FIXED: Added OFFSET and LIMIT to native query to prevent Spring from adding its own
+    @Query(value = """
+        SELECT * FROM patientcare.stock_movements sm 
+        WHERE (:medicineId IS NULL OR sm.medicine_id = CAST(:medicineId AS uuid)) 
+        AND (:type IS NULL OR sm.type = CAST(:type AS text)) 
+        AND (:startDate IS NULL OR sm.created_at >= :startDate) 
+        AND (:endDate IS NULL OR sm.created_at <= :endDate) 
+        ORDER BY sm.created_at DESC
+        OFFSET :offset ROWS 
+        FETCH FIRST :limit ROWS ONLY
+        """,
+            countQuery = """
+        SELECT COUNT(*) FROM patientcare.stock_movements sm 
+        WHERE (:medicineId IS NULL OR sm.medicine_id = CAST(:medicineId AS uuid)) 
+        AND (:type IS NULL OR sm.type = CAST(:type AS text)) 
+        AND (:startDate IS NULL OR sm.created_at >= :startDate) 
+        AND (:endDate IS NULL OR sm.created_at <= :endDate)
+        """,
+            nativeQuery = true)
+    List<StockMovement> findStockMovementsWithDateTimeNative(
             @Param("medicineId") UUID medicineId,
-            @Param("type") StockMovementType type,
+            @Param("type") String type,
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate,
-            Pageable pageable
+            @Param("offset") int offset,
+            @Param("limit") int limit
+    );
+
+    // FIXED: Custom pagination implementation
+    default Page<StockMovement> findStockMovementsWithDateTime(
+            UUID medicineId,
+            StockMovementType type,
+            LocalDateTime startDate,
+            LocalDateTime endDate,
+            Pageable pageable) {
+
+        String typeStr = type != null ? type.name() : null;
+
+        // Get paginated results
+        List<StockMovement> content = findStockMovementsWithDateTimeNative(
+                medicineId, typeStr, startDate, endDate,
+                (int) pageable.getOffset(), pageable.getPageSize());
+
+        // Get total count
+        Long total = countStockMovementsNative(medicineId, typeStr, startDate, endDate);
+
+        return new org.springframework.data.domain.PageImpl<>(
+                content, pageable, total);
+    }
+
+    // Count query for native implementation
+    @Query(value = """
+        SELECT COUNT(*) FROM patientcare.stock_movements sm 
+        WHERE (:medicineId IS NULL OR sm.medicine_id = CAST(:medicineId AS uuid)) 
+        AND (:type IS NULL OR sm.type = CAST(:type AS text)) 
+        AND (:startDate IS NULL OR sm.created_at >= :startDate) 
+        AND (:endDate IS NULL OR sm.created_at <= :endDate)
+        """, nativeQuery = true)
+    Long countStockMovementsNative(
+            @Param("medicineId") UUID medicineId,
+            @Param("type") String type,
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
     );
 
     // For LocalDate parameters
@@ -47,18 +95,7 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
 
         LocalDateTime startDateTime = startDate != null ? startDate.atStartOfDay() : null;
         LocalDateTime endDateTime = endDate != null ? endDate.atTime(23, 59, 59) : null;
-        return findStockMovementsWithFilters(medicineId, type, startDateTime, endDateTime, pageable);
-    }
-
-    // FIXED: Update the helper method in StockService to use this method
-    default Page<StockMovement> findStockMovementsWithDateTime(
-            UUID medicineId,
-            StockMovementType type,
-            LocalDateTime startDate,
-            LocalDateTime endDate,
-            Pageable pageable) {
-
-        return findStockMovementsWithFilters(medicineId, type, startDate, endDate, pageable);
+        return findStockMovementsWithDateTime(medicineId, type, startDateTime, endDateTime, pageable);
     }
 
     @Query("SELECT sm FROM StockMovement sm WHERE sm.referenceId = :referenceId")
