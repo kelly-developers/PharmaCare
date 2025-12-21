@@ -49,7 +49,7 @@ public class StockController {
         return ResponseEntity.ok(ApiResponse.success(movement, "Stock loss recorded successfully"));
     }
 
-    
+
 
     @PostMapping("/adjustment")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
