@@ -20,51 +20,56 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
 
     Page<StockMovement> findByMedicine(Medicine medicine, Pageable pageable);
 
-    // FIXED VERSION 1: Using LocalDateTime parameters instead of LocalDate with DATE() function
-    @Query("""
-        SELECT sm FROM StockMovement sm 
-        WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId) 
-        AND (:type IS NULL OR sm.type = :type) 
-        AND (
-            :startDate IS NULL 
-            OR sm.createdAt >= :startDate
-        ) 
-        AND (
-            :endDate IS NULL 
-            OR sm.createdAt <= :endDate
-        ) 
-        ORDER BY sm.createdAt DESC
-    """)
-    Page<StockMovement> findStockMovementsWithDateTime(
+    // FIXED: Use native query with explicit casting
+    @Query(value = """
+        SELECT * FROM patientcare.stock_movements sm 
+        WHERE (:medicineId IS NULL OR sm.medicine_id = CAST(:medicineId AS uuid)) 
+        AND (:type IS NULL OR sm.type = CAST(:type AS text)) 
+        AND (:startDate IS NULL OR sm.created_at >= :startDate) 
+        AND (:endDate IS NULL OR sm.created_at <= :endDate) 
+        ORDER BY sm.created_at DESC
+        """,
+            countQuery = """
+        SELECT COUNT(*) FROM patientcare.stock_movements sm 
+        WHERE (:medicineId IS NULL OR sm.medicine_id = CAST(:medicineId AS uuid)) 
+        AND (:type IS NULL OR sm.type = CAST(:type AS text)) 
+        AND (:startDate IS NULL OR sm.created_at >= :startDate) 
+        AND (:endDate IS NULL OR sm.created_at <= :endDate)
+        """,
+            nativeQuery = true)
+    Page<StockMovement> findStockMovementsWithDateTimeNative(
             @Param("medicineId") UUID medicineId,
-            @Param("type") StockMovementType type,
+            @Param("type") String type,
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate,
             Pageable pageable
     );
 
-    // FIXED VERSION 2: Alternative using LocalDate but with proper type casting
-    @Query("""
-        SELECT sm FROM StockMovement sm 
-        WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId) 
-        AND (:type IS NULL OR sm.type = :type) 
-        AND (
-            :startDate IS NULL 
-            OR CAST(sm.createdAt AS date) >= :startDate
-        ) 
-        AND (
-            :endDate IS NULL 
-            OR CAST(sm.createdAt AS date) <= :endDate
-        ) 
-        ORDER BY sm.createdAt DESC
-    """)
-    Page<StockMovement> findStockMovements(
-            @Param("medicineId") UUID medicineId,
-            @Param("type") StockMovementType type,
-            @Param("startDate") LocalDate startDate,
-            @Param("endDate") LocalDate endDate,
-            Pageable pageable
-    );
+    // Helper method to handle type conversion
+    default Page<StockMovement> findStockMovementsWithDateTime(
+            UUID medicineId,
+            StockMovementType type,
+            LocalDateTime startDate,
+            LocalDateTime endDate,
+            Pageable pageable) {
+
+        String typeStr = type != null ? type.name() : null;
+        return findStockMovementsWithDateTimeNative(
+                medicineId, typeStr, startDate, endDate, pageable);
+    }
+
+    // For LocalDate parameters
+    default Page<StockMovement> findStockMovements(
+            UUID medicineId,
+            StockMovementType type,
+            LocalDate startDate,
+            LocalDate endDate,
+            Pageable pageable) {
+
+        LocalDateTime startDateTime = startDate != null ? startDate.atStartOfDay() : null;
+        LocalDateTime endDateTime = endDate != null ? endDate.atTime(23, 59, 59) : null;
+        return findStockMovementsWithDateTime(medicineId, type, startDateTime, endDateTime, pageable);
+    }
 
     @Query("SELECT sm FROM StockMovement sm WHERE sm.referenceId = :referenceId")
     List<StockMovement> findByReferenceId(@Param("referenceId") UUID referenceId);
@@ -85,7 +90,7 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
             @Param("endDate") LocalDateTime endDate
     );
 
-    // SIMPLE VERSION: For monthly summary without complex CAST operations
+    // SIMPLE VERSION: For monthly summary without complex filters
     @Query("""
         SELECT sm FROM StockMovement sm 
         WHERE sm.createdAt >= :startDate 
@@ -105,7 +110,7 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
         return findByDateRange(startDateTime, endDateTime, pageable);
     }
 
-    // Count movements by type for a date range (using LocalDateTime to avoid CAST issues)
+    // Count movements by type for a date range
     @Query("""
         SELECT COUNT(sm) FROM StockMovement sm 
         WHERE sm.type = :type 
@@ -118,14 +123,7 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
             @Param("endDate") LocalDateTime endDate
     );
 
-    // Default method for LocalDate parameters
-    default long countByTypeAndDateRange(StockMovementType type, LocalDate startDate, LocalDate endDate) {
-        LocalDateTime startDateTime = startDate.atStartOfDay();
-        LocalDateTime endDateTime = endDate.atTime(23, 59, 59);
-        return countByTypeAndDateRange(type, startDateTime, endDateTime);
-    }
-
-    // Sum quantities by type for a date range (using LocalDateTime to avoid CAST issues)
+    // Sum quantities by type for a date range
     @Query("""
         SELECT COALESCE(SUM(sm.quantity), 0) FROM StockMovement sm 
         WHERE sm.type = :type 
@@ -138,25 +136,14 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
             @Param("endDate") LocalDateTime endDate
     );
 
-    // Default method for LocalDate parameters
-    default int sumQuantityByTypeAndDateRange(StockMovementType type, LocalDate startDate, LocalDate endDate) {
-        LocalDateTime startDateTime = startDate.atStartOfDay();
-        LocalDateTime endDateTime = endDate.atTime(23, 59, 59);
-        return sumQuantityByTypeAndDateRange(type, startDateTime, endDateTime);
-    }
-
-    // Helper method to get all movements without pagination (for summary)
+    // SIMPLE method without complex filtering - use this for monthly summary
     @Query("""
         SELECT sm FROM StockMovement sm 
-        WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId) 
-        AND (:type IS NULL OR sm.type = :type) 
-        AND sm.createdAt >= :startDate 
+        WHERE sm.createdAt >= :startDate 
         AND sm.createdAt <= :endDate 
         ORDER BY sm.createdAt DESC
     """)
     List<StockMovement> findAllMovementsInPeriod(
-            @Param("medicineId") UUID medicineId,
-            @Param("type") StockMovementType type,
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate
     );
