@@ -66,6 +66,7 @@ public class SaleService {
         LocalDateTime startDateTime = startDate != null ? startDate.atStartOfDay() : null;
         LocalDateTime endDateTime = endDate != null ? endDate.atTime(LocalTime.MAX) : null;
 
+        // Use the custom repository method
         Page<Sale> salesPage = saleRepository.findSalesByCriteria(
                 startDateTime, endDateTime, cashierId, paymentMethod, pageable);
 

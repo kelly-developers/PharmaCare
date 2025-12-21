@@ -19,11 +19,12 @@ import java.util.UUID;
 public interface SaleRepository extends JpaRepository<Sale, UUID> {
     Page<Sale> findByCashier(User cashier, Pageable pageable);
 
-    // FIXED: Simplified approach - remove the problematic COALESCE
-    @Query("""
+    // FIXED: Use native query or custom repository implementation
+    // This is a simplified version that should work with PostgreSQL
+    @Query(value = """
         SELECT s FROM Sale s 
-        WHERE (:startDate IS NULL OR s.createdAt >= CAST(:startDate AS timestamp)) 
-        AND (:endDate IS NULL OR s.createdAt <= CAST(:endDate AS timestamp)) 
+        WHERE (:startDate IS NULL OR s.createdAt >= :startDate) 
+        AND (:endDate IS NULL OR s.createdAt <= :endDate) 
         AND (:cashierId IS NULL OR s.cashier.id = :cashierId) 
         AND (:paymentMethod IS NULL OR s.paymentMethod = :paymentMethod)
         ORDER BY s.createdAt DESC
@@ -33,6 +34,23 @@ public interface SaleRepository extends JpaRepository<Sale, UUID> {
             @Param("endDate") LocalDateTime endDate,
             @Param("cashierId") UUID cashierId,
             @Param("paymentMethod") PaymentMethod paymentMethod,
+            Pageable pageable
+    );
+
+    // Alternative: Native query with proper NULL handling
+    @Query(value = """
+        SELECT * FROM patientcare.sales s 
+        WHERE (CAST(:startDate AS timestamp) IS NULL OR s.created_at >= CAST(:startDate AS timestamp)) 
+        AND (CAST(:endDate AS timestamp) IS NULL OR s.created_at <= CAST(:endDate AS timestamp)) 
+        AND (:cashierId IS NULL OR s.cashier_id = CAST(:cashierId AS uuid)) 
+        AND (:paymentMethod IS NULL OR s.payment_method = CAST(:paymentMethod AS text))
+        ORDER BY s.created_at DESC
+        """, nativeQuery = true)
+    Page<Sale> findSalesByCriteriaNative(
+            @Param("startDate") String startDate,
+            @Param("endDate") String endDate,
+            @Param("cashierId") String cashierId,
+            @Param("paymentMethod") String paymentMethod,
             Pageable pageable
     );
 
@@ -84,9 +102,13 @@ public interface SaleRepository extends JpaRepository<Sale, UUID> {
             @Param("endDate") LocalDateTime endDate
     );
 
-    @Query("SELECT CAST(s.createdAt AS date), SUM(s.total) as dailySales " +
-            "FROM Sale s WHERE s.createdAt >= :startDate AND s.createdAt <= :endDate " +
-            "GROUP BY CAST(s.createdAt AS date) ORDER BY CAST(s.createdAt AS date)")
+    @Query(value = """
+        SELECT DATE(s.created_at), SUM(s.total) as dailySales 
+        FROM patientcare.sales s 
+        WHERE s.created_at >= :startDate AND s.created_at <= :endDate 
+        GROUP BY DATE(s.created_at) 
+        ORDER BY DATE(s.created_at)
+        """, nativeQuery = true)
     List<Object[]> getDailySales(
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate
