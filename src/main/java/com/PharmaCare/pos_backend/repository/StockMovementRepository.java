@@ -17,9 +17,10 @@ import java.util.UUID;
 
 @Repository
 public interface StockMovementRepository extends JpaRepository<StockMovement, UUID> {
+
     Page<StockMovement> findByMedicine(Medicine medicine, Pageable pageable);
 
-    // FIXED: Simplified query without DATE() function for NULL comparisons
+    // FIXED: Single method with proper null handling
     @Query("""
         SELECT sm FROM StockMovement sm 
         WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId) 
@@ -29,23 +30,6 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
         ORDER BY sm.createdAt DESC
     """)
     Page<StockMovement> findStockMovements(
-            @Param("medicineId") UUID medicineId,
-            @Param("type") StockMovementType type,
-            @Param("startDate") LocalDate startDate,
-            @Param("endDate") LocalDate endDate,
-            Pageable pageable
-    );
-
-    // Alternative: Use CAST instead of DATE() function
-    @Query("""
-        SELECT sm FROM StockMovement sm 
-        WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId) 
-        AND (:type IS NULL OR sm.type = :type) 
-        AND (COALESCE(:startDate, '1900-01-01') = '1900-01-01' OR CAST(sm.createdAt AS date) >= :startDate) 
-        AND (COALESCE(:endDate, '9999-12-31') = '9999-12-31' OR CAST(sm.createdAt AS date) <= :endDate) 
-        ORDER BY sm.createdAt DESC
-    """)
-    Page<StockMovement> findStockMovementsAlternative(
             @Param("medicineId") UUID medicineId,
             @Param("type") StockMovementType type,
             @Param("startDate") LocalDate startDate,
@@ -70,5 +54,35 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
     List<Object[]> getStockMovementSummary(
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate
+    );
+
+    // Additional helper method for monthly summary
+    @Query("SELECT sm FROM StockMovement sm WHERE " +
+            "CAST(sm.createdAt AS date) >= :startDate AND CAST(sm.createdAt AS date) <= :endDate " +
+            "ORDER BY sm.createdAt DESC")
+    Page<StockMovement> findByDateRange(
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            Pageable pageable
+    );
+
+    // Count movements by type for a date range
+    @Query("SELECT COUNT(sm) FROM StockMovement sm WHERE " +
+            "sm.type = :type AND " +
+            "CAST(sm.createdAt AS date) >= :startDate AND CAST(sm.createdAt AS date) <= :endDate")
+    long countByTypeAndDateRange(
+            @Param("type") StockMovementType type,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
+    );
+
+    // Sum quantities by type for a date range
+    @Query("SELECT COALESCE(SUM(sm.quantity), 0) FROM StockMovement sm WHERE " +
+            "sm.type = :type AND " +
+            "CAST(sm.createdAt AS date) >= :startDate AND CAST(sm.createdAt AS date) <= :endDate")
+    int sumQuantityByTypeAndDateRange(
+            @Param("type") StockMovementType type,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate
     );
 }
