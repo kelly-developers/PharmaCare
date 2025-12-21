@@ -11,7 +11,6 @@ import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 
 import java.math.BigDecimal;
-import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.UUID;
@@ -20,11 +19,11 @@ import java.util.UUID;
 public interface SaleRepository extends JpaRepository<Sale, UUID> {
     Page<Sale> findByCashier(User cashier, Pageable pageable);
 
-    // FIXED: Simplified query without complex date comparisons
+    // FIXED: Use COALESCE or CASE statement to handle NULL parameters properly
     @Query("""
         SELECT s FROM Sale s 
-        WHERE (:startDate IS NULL OR s.createdAt >= :startDate) 
-        AND (:endDate IS NULL OR s.createdAt <= :endDate) 
+        WHERE (COALESCE(:startDate, '1900-01-01') = '1900-01-01' OR s.createdAt >= :startDate) 
+        AND (COALESCE(:endDate, '9999-12-31') = '9999-12-31' OR s.createdAt <= :endDate) 
         AND (:cashierId IS NULL OR s.cashier.id = :cashierId) 
         AND (:paymentMethod IS NULL OR s.paymentMethod = :paymentMethod)
         ORDER BY s.createdAt DESC
@@ -37,14 +36,29 @@ public interface SaleRepository extends JpaRepository<Sale, UUID> {
             Pageable pageable
     );
 
-    // FIXED: Use LocalDateTime parameters
+    // Alternative simpler version if COALESCE doesn't work:
+    @Query("""
+        SELECT s FROM Sale s 
+        WHERE (:startDate IS NULL OR s.createdAt >= CAST(:startDate AS timestamp)) 
+        AND (:endDate IS NULL OR s.createdAt <= CAST(:endDate AS timestamp)) 
+        AND (:cashierId IS NULL OR s.cashier.id = :cashierId) 
+        AND (:paymentMethod IS NULL OR s.paymentMethod = :paymentMethod)
+        ORDER BY s.createdAt DESC
+    """)
+    Page<Sale> findSalesByCriteria2(
+            @Param("startDate") String startDate,
+            @Param("endDate") String endDate,
+            @Param("cashierId") UUID cashierId,
+            @Param("paymentMethod") PaymentMethod paymentMethod,
+            Pageable pageable
+    );
+
     @Query("SELECT s FROM Sale s WHERE s.createdAt >= :startOfDay AND s.createdAt <= :endOfDay")
     List<Sale> findByDate(
             @Param("startOfDay") LocalDateTime startOfDay,
             @Param("endOfDay") LocalDateTime endOfDay
     );
 
-    // FIXED: Use LocalDateTime parameters
     @Query("SELECT s FROM Sale s WHERE s.createdAt >= :startOfDay AND s.createdAt <= :endOfDay AND s.cashier.id = :cashierId")
     List<Sale> findByDateAndCashier(
             @Param("startOfDay") LocalDateTime startOfDay,
