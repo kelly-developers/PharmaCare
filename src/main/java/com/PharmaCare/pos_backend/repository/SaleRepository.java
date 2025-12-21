@@ -19,24 +19,7 @@ import java.util.UUID;
 public interface SaleRepository extends JpaRepository<Sale, UUID> {
     Page<Sale> findByCashier(User cashier, Pageable pageable);
 
-    // FIXED: Use COALESCE or CASE statement to handle NULL parameters properly
-    @Query("""
-        SELECT s FROM Sale s 
-        WHERE (COALESCE(:startDate, '1900-01-01') = '1900-01-01' OR s.createdAt >= :startDate) 
-        AND (COALESCE(:endDate, '9999-12-31') = '9999-12-31' OR s.createdAt <= :endDate) 
-        AND (:cashierId IS NULL OR s.cashier.id = :cashierId) 
-        AND (:paymentMethod IS NULL OR s.paymentMethod = :paymentMethod)
-        ORDER BY s.createdAt DESC
-    """)
-    Page<Sale> findSalesByCriteria(
-            @Param("startDate") LocalDateTime startDate,
-            @Param("endDate") LocalDateTime endDate,
-            @Param("cashierId") UUID cashierId,
-            @Param("paymentMethod") PaymentMethod paymentMethod,
-            Pageable pageable
-    );
-
-    // Alternative simpler version if COALESCE doesn't work:
+    // FIXED: Simplified approach - remove the problematic COALESCE
     @Query("""
         SELECT s FROM Sale s 
         WHERE (:startDate IS NULL OR s.createdAt >= CAST(:startDate AS timestamp)) 
@@ -45,9 +28,9 @@ public interface SaleRepository extends JpaRepository<Sale, UUID> {
         AND (:paymentMethod IS NULL OR s.paymentMethod = :paymentMethod)
         ORDER BY s.createdAt DESC
     """)
-    Page<Sale> findSalesByCriteria2(
-            @Param("startDate") String startDate,
-            @Param("endDate") String endDate,
+    Page<Sale> findSalesByCriteria(
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate,
             @Param("cashierId") UUID cashierId,
             @Param("paymentMethod") PaymentMethod paymentMethod,
             Pageable pageable
@@ -101,9 +84,9 @@ public interface SaleRepository extends JpaRepository<Sale, UUID> {
             @Param("endDate") LocalDateTime endDate
     );
 
-    @Query("SELECT FUNCTION('DATE', s.createdAt), SUM(s.total) as dailySales " +
+    @Query("SELECT CAST(s.createdAt AS date), SUM(s.total) as dailySales " +
             "FROM Sale s WHERE s.createdAt >= :startDate AND s.createdAt <= :endDate " +
-            "GROUP BY FUNCTION('DATE', s.createdAt) ORDER BY FUNCTION('DATE', s.createdAt)")
+            "GROUP BY CAST(s.createdAt AS date) ORDER BY CAST(s.createdAt AS date)")
     List<Object[]> getDailySales(
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate

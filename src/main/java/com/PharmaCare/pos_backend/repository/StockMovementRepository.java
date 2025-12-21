@@ -19,16 +19,33 @@ import java.util.UUID;
 public interface StockMovementRepository extends JpaRepository<StockMovement, UUID> {
     Page<StockMovement> findByMedicine(Medicine medicine, Pageable pageable);
 
-    // FIXED: Handle NULL dates properly with DATE() function
+    // FIXED: Simplified query without DATE() function for NULL comparisons
     @Query("""
         SELECT sm FROM StockMovement sm 
         WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId) 
         AND (:type IS NULL OR sm.type = :type) 
-        AND (:startDate IS NULL OR DATE(sm.createdAt) >= :startDate) 
-        AND (:endDate IS NULL OR DATE(sm.createdAt) <= :endDate) 
+        AND (:startDate IS NULL OR CAST(sm.createdAt AS date) >= :startDate) 
+        AND (:endDate IS NULL OR CAST(sm.createdAt AS date) <= :endDate) 
         ORDER BY sm.createdAt DESC
     """)
     Page<StockMovement> findStockMovements(
+            @Param("medicineId") UUID medicineId,
+            @Param("type") StockMovementType type,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            Pageable pageable
+    );
+
+    // Alternative: Use CAST instead of DATE() function
+    @Query("""
+        SELECT sm FROM StockMovement sm 
+        WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId) 
+        AND (:type IS NULL OR sm.type = :type) 
+        AND (COALESCE(:startDate, '1900-01-01') = '1900-01-01' OR CAST(sm.createdAt AS date) >= :startDate) 
+        AND (COALESCE(:endDate, '9999-12-31') = '9999-12-31' OR CAST(sm.createdAt AS date) <= :endDate) 
+        ORDER BY sm.createdAt DESC
+    """)
+    Page<StockMovement> findStockMovementsAlternative(
             @Param("medicineId") UUID medicineId,
             @Param("type") StockMovementType type,
             @Param("startDate") LocalDate startDate,

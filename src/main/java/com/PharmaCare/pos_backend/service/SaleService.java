@@ -170,19 +170,33 @@ public class SaleService {
             byPaymentMethod.put(method.name(), amount);
         }
 
+// In the getSalesSummary method, change the line that gets daily data:
         List<Object[]> dailyData = saleRepository.getDailySales(startDateTime, endDateTime);
         List<SalesSummary.DailySales> dailyBreakdown = dailyData.stream()
                 .map(data -> {
                     try {
-                        LocalDate date = ((java.sql.Date) data[0]).toLocalDate();
+                        // Use java.sql.Date or LocalDate depending on what's returned
+                        LocalDate date;
+                        if (data[0] instanceof java.sql.Date) {
+                            date = ((java.sql.Date) data[0]).toLocalDate();
+                        } else if (data[0] instanceof java.sql.Timestamp) {
+                            date = ((java.sql.Timestamp) data[0]).toLocalDateTime().toLocalDate();
+                        } else if (data[0] instanceof LocalDateTime) {
+                            date = ((LocalDateTime) data[0]).toLocalDate();
+                        } else {
+                            // Try to parse as string if needed
+                            date = LocalDate.parse(data[0].toString());
+                        }
+
                         BigDecimal salesAmount = (BigDecimal) data[1];
                         return SalesSummary.DailySales.builder()
                                 .date(date)
                                 .sales(salesAmount)
                                 .profit(salesAmount.multiply(BigDecimal.valueOf(0.3)))
-                                .transactions(0)
+                                .transactions(0) // You'll need to calculate this separately
                                 .build();
                     } catch (Exception e) {
+                        log.warn("Error parsing daily sales data: {}", e.getMessage());
                         return SalesSummary.DailySales.builder()
                                 .date(LocalDate.now())
                                 .sales(BigDecimal.ZERO)
