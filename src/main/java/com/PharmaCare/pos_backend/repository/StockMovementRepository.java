@@ -20,13 +20,19 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
 
     Page<StockMovement> findByMedicine(Medicine medicine, Pageable pageable);
 
-    // FIXED: Single method with proper null handling
+    // FIXED VERSION: Simplified without CAST function issues
     @Query("""
         SELECT sm FROM StockMovement sm 
         WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId) 
         AND (:type IS NULL OR sm.type = :type) 
-        AND (:startDate IS NULL OR CAST(sm.createdAt AS date) >= :startDate) 
-        AND (:endDate IS NULL OR CAST(sm.createdAt AS date) <= :endDate) 
+        AND (
+            :startDate IS NULL 
+            OR DATE(sm.createdAt) >= :startDate
+        ) 
+        AND (
+            :endDate IS NULL 
+            OR DATE(sm.createdAt) <= :endDate
+        ) 
         ORDER BY sm.createdAt DESC
     """)
     Page<StockMovement> findStockMovements(
@@ -56,33 +62,63 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
             @Param("endDate") LocalDateTime endDate
     );
 
-    // Additional helper method for monthly summary
-    @Query("SELECT sm FROM StockMovement sm WHERE " +
-            "CAST(sm.createdAt AS date) >= :startDate AND CAST(sm.createdAt AS date) <= :endDate " +
-            "ORDER BY sm.createdAt DESC")
+    // SIMPLE VERSION: For monthly summary without complex CAST operations
+    @Query("""
+        SELECT sm FROM StockMovement sm 
+        WHERE sm.createdAt >= :startDate 
+        AND sm.createdAt <= :endDate 
+        ORDER BY sm.createdAt DESC
+    """)
     Page<StockMovement> findByDateRange(
-            @Param("startDate") LocalDate startDate,
-            @Param("endDate") LocalDate endDate,
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate,
             Pageable pageable
     );
 
-    // Count movements by type for a date range
-    @Query("SELECT COUNT(sm) FROM StockMovement sm WHERE " +
-            "sm.type = :type AND " +
-            "CAST(sm.createdAt AS date) >= :startDate AND CAST(sm.createdAt AS date) <= :endDate")
+    // For monthly summary with LocalDate parameters
+    default Page<StockMovement> findByDateRange(LocalDate startDate, LocalDate endDate, Pageable pageable) {
+        LocalDateTime startDateTime = startDate.atStartOfDay();
+        LocalDateTime endDateTime = endDate.atTime(23, 59, 59);
+        return findByDateRange(startDateTime, endDateTime, pageable);
+    }
+
+    // Count movements by type for a date range (using LocalDateTime to avoid CAST issues)
+    @Query("""
+        SELECT COUNT(sm) FROM StockMovement sm 
+        WHERE sm.type = :type 
+        AND sm.createdAt >= :startDate 
+        AND sm.createdAt <= :endDate
+    """)
     long countByTypeAndDateRange(
             @Param("type") StockMovementType type,
-            @Param("startDate") LocalDate startDate,
-            @Param("endDate") LocalDate endDate
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
     );
 
-    // Sum quantities by type for a date range
-    @Query("SELECT COALESCE(SUM(sm.quantity), 0) FROM StockMovement sm WHERE " +
-            "sm.type = :type AND " +
-            "CAST(sm.createdAt AS date) >= :startDate AND CAST(sm.createdAt AS date) <= :endDate")
+    // Default method for LocalDate parameters
+    default long countByTypeAndDateRange(StockMovementType type, LocalDate startDate, LocalDate endDate) {
+        LocalDateTime startDateTime = startDate.atStartOfDay();
+        LocalDateTime endDateTime = endDate.atTime(23, 59, 59);
+        return countByTypeAndDateRange(type, startDateTime, endDateTime);
+    }
+
+    // Sum quantities by type for a date range (using LocalDateTime to avoid CAST issues)
+    @Query("""
+        SELECT COALESCE(SUM(sm.quantity), 0) FROM StockMovement sm 
+        WHERE sm.type = :type 
+        AND sm.createdAt >= :startDate 
+        AND sm.createdAt <= :endDate
+    """)
     int sumQuantityByTypeAndDateRange(
             @Param("type") StockMovementType type,
-            @Param("startDate") LocalDate startDate,
-            @Param("endDate") LocalDate endDate
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
     );
+
+    // Default method for LocalDate parameters
+    default int sumQuantityByTypeAndDateRange(StockMovementType type, LocalDate startDate, LocalDate endDate) {
+        LocalDateTime startDateTime = startDate.atStartOfDay();
+        LocalDateTime endDateTime = endDate.atTime(23, 59, 59);
+        return sumQuantityByTypeAndDateRange(type, startDateTime, endDateTime);
+    }
 }
