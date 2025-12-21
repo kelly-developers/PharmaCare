@@ -46,7 +46,8 @@ public class StockController {
         } catch (Exception e) {
             log.error("Error fetching stock movements: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<PaginatedResponse<StockMovementResponse>>) ApiResponse.error("Failed to fetch stock movements: " + e.getMessage()));
+                    .body(ApiResponse.<PaginatedResponse<StockMovementResponse>>error(
+                            "Failed to fetch stock movements: " + e.getMessage()));
         }
     }
 
@@ -61,7 +62,8 @@ public class StockController {
         } catch (Exception e) {
             log.error("Error recording stock loss: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<StockMovementResponse>) ApiResponse.error("Failed to record stock loss: " + e.getMessage()));
+                    .body(ApiResponse.<StockMovementResponse>error(
+                            "Failed to record stock loss: " + e.getMessage()));
         }
     }
 
@@ -76,7 +78,8 @@ public class StockController {
         } catch (Exception e) {
             log.error("Error recording stock adjustment: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<StockMovementResponse>) ApiResponse.error("Failed to record stock adjustment: " + e.getMessage()));
+                    .body(ApiResponse.<StockMovementResponse>error(
+                            "Failed to record stock adjustment: " + e.getMessage()));
         }
     }
 
@@ -94,7 +97,8 @@ public class StockController {
         } catch (Exception e) {
             log.error("Error fetching stock movements by medicine: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<PaginatedResponse<StockMovementResponse>>) ApiResponse.error("Failed to fetch stock movements: " + e.getMessage()));
+                    .body(ApiResponse.<PaginatedResponse<StockMovementResponse>>error(
+                            "Failed to fetch stock movements: " + e.getMessage()));
         }
     }
 
@@ -107,7 +111,8 @@ public class StockController {
         } catch (Exception e) {
             log.error("Error fetching stock movements by reference: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<List<StockMovementResponse>>) ApiResponse.error("Failed to fetch stock movements: " + e.getMessage()));
+                    .body(ApiResponse.<List<StockMovementResponse>>error(
+                            "Failed to fetch stock movements: " + e.getMessage()));
         }
     }
 
@@ -131,11 +136,12 @@ public class StockController {
         } catch (Exception e) {
             log.error("Error calculating net movement: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<Map<String, Object>>) ApiResponse.error("Failed to calculate net movement: " + e.getMessage()));
+                    .body(ApiResponse.<Map<String, Object>>error(
+                            "Failed to calculate net movement: " + e.getMessage()));
         }
     }
 
-    // NEW ENDPOINT: Monthly stock summary
+    // FIXED: Monthly stock summary using LocalDateTime instead of DATE() function
     @GetMapping("/monthly")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getMonthlyStockSummary(
@@ -147,21 +153,21 @@ public class StockController {
             LocalDate startOfMonth = yearMonth.atDay(1);
             LocalDate endOfMonth = yearMonth.atEndOfMonth();
 
+            // Convert to LocalDateTime for proper query
+            LocalDateTime startDateTime = startOfMonth.atStartOfDay();
+            LocalDateTime endDateTime = endOfMonth.atTime(23, 59, 59);
+
             Map<String, Object> summary = new HashMap<>();
             summary.put("month", yearMonth.toString());
             summary.put("startDate", startOfMonth);
             summary.put("endDate", endOfMonth);
 
-            // Get total movements for the month
-            PaginatedResponse<StockMovementResponse> movements = stockService.getStockMovementsWithDates(
-                    1, Integer.MAX_VALUE, null, null, startOfMonth, endOfMonth);
-
-            // Get the data from PaginatedResponse
-            List<StockMovementResponse> items = movements.getData();
-            long totalItems = movements.getPagination().getTotal();
+            // Get stock movements using the new method that handles LocalDateTime
+            List<StockMovementResponse> items = stockService.getStockMovementsForMonthlySummary(
+                    null, null, startDateTime, endDateTime);
 
             // Calculate summary statistics
-            long totalMovements = totalItems;
+            long totalMovements = items.size();
 
             long purchaseMovements = items.stream()
                     .filter(m -> m.getType() == StockMovementType.PURCHASE)
@@ -239,7 +245,8 @@ public class StockController {
         } catch (Exception e) {
             log.error("Error generating monthly stock summary: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<Map<String, Object>>) ApiResponse.error("Failed to generate monthly stock summary: " + e.getMessage()));
+                    .body(ApiResponse.<Map<String, Object>>error(
+                            "Failed to generate monthly stock summary: " + e.getMessage()));
         }
     }
 
@@ -248,7 +255,6 @@ public class StockController {
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getStockAuditReport() {
         try {
-            // For now, return a simple placeholder
             Map<String, Object> report = new HashMap<>();
             report.put("message", "Stock audit report endpoint");
             report.put("data", Collections.emptyList());
@@ -258,7 +264,8 @@ public class StockController {
         } catch (Exception e) {
             log.error("Error generating stock audit report: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<Map<String, Object>>) ApiResponse.error("Failed to generate audit report: " + e.getMessage()));
+                    .body(ApiResponse.<Map<String, Object>>error(
+                            "Failed to generate audit report: " + e.getMessage()));
         }
     }
 
@@ -272,14 +279,15 @@ public class StockController {
             Map<String, Object> comparison = new HashMap<>();
             comparison.put("month", month);
             comparison.put("message", "Stock comparison data for " + month);
-            comparison.put("data", Collections.emptyList()); // Placeholder
+            comparison.put("data", Collections.emptyList());
             comparison.put("generatedAt", LocalDateTime.now());
 
             return ResponseEntity.ok(ApiResponse.success(comparison));
         } catch (Exception e) {
             log.error("Error generating stock comparison: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<Map<String, Object>>) ApiResponse.error("Failed to generate stock comparison: " + e.getMessage()));
+                    .body(ApiResponse.<Map<String, Object>>error(
+                            "Failed to generate stock comparison: " + e.getMessage()));
         }
     }
 
@@ -298,7 +306,8 @@ public class StockController {
         } catch (Exception e) {
             log.error("Error uploading opening stock: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<Map<String, Object>>) ApiResponse.error("Failed to upload opening stock: " + e.getMessage()));
+                    .body(ApiResponse.<Map<String, Object>>error(
+                            "Failed to upload opening stock: " + e.getMessage()));
         }
     }
 
@@ -317,7 +326,8 @@ public class StockController {
         } catch (Exception e) {
             log.error("Error uploading closing stock: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body((ApiResponse<Map<String, Object>>) ApiResponse.error("Failed to upload closing stock: " + e.getMessage()));
+                    .body(ApiResponse.<Map<String, Object>>error(
+                            "Failed to upload closing stock: " + e.getMessage()));
         }
     }
 }

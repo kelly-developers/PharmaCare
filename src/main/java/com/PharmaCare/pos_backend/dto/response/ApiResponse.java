@@ -31,8 +31,17 @@ public class ApiResponse<T> {
                 .build();
     }
 
-    public static ApiResponse<?> error(String message) {
-        return ApiResponse.builder()
+    // FIXED: Add a generic type parameter to the error method
+    public static <T> ApiResponse<T> error(String message) {
+        return ApiResponse.<T>builder()
+                .success(false)
+                .message(message)
+                .build();
+    }
+
+    // Alternatively, you can create a non-generic error method
+    public static ApiResponse<Void> errorResponse(String message) {
+        return ApiResponse.<Void>builder()
                 .success(false)
                 .message(message)
                 .build();

@@ -27,7 +27,9 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
@@ -41,6 +43,7 @@ public class StockService {
     private final UserRepository userRepository;
     private final ModelMapper modelMapper;
 
+    // FIXED: This method now handles LocalDate parameters correctly
     public PaginatedResponse<StockMovementResponse> getStockMovementsWithDates(
             int page, int limit, UUID medicineId,
             StockMovementType type,
@@ -49,8 +52,13 @@ public class StockService {
 
         Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("createdAt").descending());
 
-        Page<StockMovement> movementsPage = stockMovementRepository.findStockMovements(
-                medicineId, type, startDate, endDate, pageable);
+        // Convert LocalDate to LocalDateTime for proper query
+        LocalDateTime startDateTime = startDate != null ? startDate.atStartOfDay() : null;
+        LocalDateTime endDateTime = endDate != null ? endDate.atTime(23, 59, 59) : null;
+
+        // Use the repository method that handles LocalDateTime
+        Page<StockMovement> movementsPage = stockMovementRepository.findStockMovementsWithDateTime(
+                medicineId, type, startDateTime, endDateTime, pageable);
 
         List<StockMovementResponse> movementResponses = movementsPage.getContent()
                 .stream()
@@ -60,16 +68,42 @@ public class StockService {
         return PaginatedResponse.of(movementResponses, page, limit, movementsPage.getTotalElements());
     }
 
+    // NEW: Method specifically for monthly summary without pagination
+    public List<StockMovementResponse> getStockMovementsForMonthlySummary(
+            UUID medicineId,
+            StockMovementType type,
+            LocalDateTime startDateTime,
+            LocalDateTime endDateTime) {
+
+        // Use a large page size to get all records
+        Pageable pageable = PageRequest.of(0, 1000, Sort.by("createdAt").descending());
+
+        Page<StockMovement> movementsPage = stockMovementRepository.findStockMovementsWithDateTime(
+                medicineId, type, startDateTime, endDateTime, pageable);
+
+        return movementsPage.getContent()
+                .stream()
+                .map(this::mapToStockMovementResponse)
+                .collect(Collectors.toList());
+    }
+
     public PaginatedResponse<StockMovementResponse> getStockMovementsWithDateTimes(
             int page, int limit, UUID medicineId,
             StockMovementType type,
             LocalDateTime startDateTime,
             LocalDateTime endDateTime) {
 
-        LocalDate startDate = startDateTime != null ? startDateTime.toLocalDate() : null;
-        LocalDate endDate = endDateTime != null ? endDateTime.toLocalDate() : null;
+        Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("createdAt").descending());
 
-        return getStockMovementsWithDates(page, limit, medicineId, type, startDate, endDate);
+        Page<StockMovement> movementsPage = stockMovementRepository.findStockMovementsWithDateTime(
+                medicineId, type, startDateTime, endDateTime, pageable);
+
+        List<StockMovementResponse> movementResponses = movementsPage.getContent()
+                .stream()
+                .map(this::mapToStockMovementResponse)
+                .collect(Collectors.toList());
+
+        return PaginatedResponse.of(movementResponses, page, limit, movementsPage.getTotalElements());
     }
 
     public PaginatedResponse<StockMovementResponse> getStockMovements(
@@ -249,6 +283,25 @@ public class StockService {
 
     public Integer getNetMovementForPeriod(UUID medicineId, LocalDateTime startDate, LocalDateTime endDate) {
         return stockMovementRepository.getNetMovementForPeriod(medicineId, startDate, endDate);
+    }
+
+    // NEW: Get summary statistics for a period
+    public Map<String, Object> getStockSummaryForPeriod(LocalDate startDate, LocalDate endDate) {
+        LocalDateTime startDateTime = startDate.atStartOfDay();
+        LocalDateTime endDateTime = endDate.atTime(23, 59, 59);
+
+        Map<String, Object> summary = new HashMap<>();
+
+        // Get counts for each movement type
+        for (StockMovementType type : StockMovementType.values()) {
+            long count = stockMovementRepository.countByTypeAndDateRange(type, startDateTime, endDateTime);
+            int quantity = stockMovementRepository.sumQuantityByTypeAndDateRange(type, startDateTime, endDateTime);
+
+            summary.put(type.name().toLowerCase() + "_count", count);
+            summary.put(type.name().toLowerCase() + "_quantity", quantity);
+        }
+
+        return summary;
     }
 
     private StockMovementResponse mapToStockMovementResponse(StockMovement stockMovement) {
