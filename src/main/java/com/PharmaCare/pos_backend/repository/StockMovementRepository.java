@@ -20,27 +20,27 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
 
     Page<StockMovement> findByMedicine(Medicine medicine, Pageable pageable);
 
-    // FIXED: Added OFFSET and LIMIT to native query to prevent Spring from adding its own
+    // FIXED: Removed CAST for UUID parameters - handle null checks differently
     @Query(value = """
         SELECT * FROM patientcare.stock_movements sm 
-        WHERE (:medicineId IS NULL OR sm.medicine_id = CAST(:medicineId AS uuid)) 
-        AND (:type IS NULL OR sm.type = CAST(:type AS text)) 
-        AND (:startDate IS NULL OR sm.created_at >= :startDate) 
-        AND (:endDate IS NULL OR sm.created_at <= :endDate) 
+        WHERE ((:medicineId IS NULL) OR (sm.medicine_id = :medicineId::uuid))
+        AND ((:type IS NULL) OR (sm.type = :type))
+        AND ((:startDate IS NULL) OR (sm.created_at >= :startDate))
+        AND ((:endDate IS NULL) OR (sm.created_at <= :endDate))
         ORDER BY sm.created_at DESC
         OFFSET :offset ROWS 
         FETCH FIRST :limit ROWS ONLY
         """,
             countQuery = """
         SELECT COUNT(*) FROM patientcare.stock_movements sm 
-        WHERE (:medicineId IS NULL OR sm.medicine_id = CAST(:medicineId AS uuid)) 
-        AND (:type IS NULL OR sm.type = CAST(:type AS text)) 
-        AND (:startDate IS NULL OR sm.created_at >= :startDate) 
-        AND (:endDate IS NULL OR sm.created_at <= :endDate)
+        WHERE ((:medicineId IS NULL) OR (sm.medicine_id = :medicineId::uuid))
+        AND ((:type IS NULL) OR (sm.type = :type))
+        AND ((:startDate IS NULL) OR (sm.created_at >= :startDate))
+        AND ((:endDate IS NULL) OR (sm.created_at <= :endDate))
         """,
             nativeQuery = true)
     List<StockMovement> findStockMovementsWithDateTimeNative(
-            @Param("medicineId") UUID medicineId,
+            @Param("medicineId") String medicineId,  // Changed from UUID to String
             @Param("type") String type,
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate,
@@ -48,7 +48,7 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
             @Param("limit") int limit
     );
 
-    // FIXED: Custom pagination implementation
+    // FIXED: Updated method to handle String parameters
     default Page<StockMovement> findStockMovementsWithDateTime(
             UUID medicineId,
             StockMovementType type,
@@ -56,30 +56,31 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
             LocalDateTime endDate,
             Pageable pageable) {
 
+        String medicineIdStr = medicineId != null ? medicineId.toString() : null;
         String typeStr = type != null ? type.name() : null;
 
         // Get paginated results
         List<StockMovement> content = findStockMovementsWithDateTimeNative(
-                medicineId, typeStr, startDate, endDate,
+                medicineIdStr, typeStr, startDate, endDate,
                 (int) pageable.getOffset(), pageable.getPageSize());
 
         // Get total count
-        Long total = countStockMovementsNative(medicineId, typeStr, startDate, endDate);
+        Long total = countStockMovementsNative(medicineIdStr, typeStr, startDate, endDate);
 
         return new org.springframework.data.domain.PageImpl<>(
                 content, pageable, total);
     }
 
-    // Count query for native implementation
+    // FIXED: Updated count query
     @Query(value = """
         SELECT COUNT(*) FROM patientcare.stock_movements sm 
-        WHERE (:medicineId IS NULL OR sm.medicine_id = CAST(:medicineId AS uuid)) 
-        AND (:type IS NULL OR sm.type = CAST(:type AS text)) 
-        AND (:startDate IS NULL OR sm.created_at >= :startDate) 
-        AND (:endDate IS NULL OR sm.created_at <= :endDate)
+        WHERE ((:medicineId IS NULL) OR (sm.medicine_id = :medicineId::uuid))
+        AND ((:type IS NULL) OR (sm.type = :type))
+        AND ((:startDate IS NULL) OR (sm.created_at >= :startDate))
+        AND ((:endDate IS NULL) OR (sm.created_at <= :endDate))
         """, nativeQuery = true)
     Long countStockMovementsNative(
-            @Param("medicineId") UUID medicineId,
+            @Param("medicineId") String medicineId,  // Changed from UUID to String
             @Param("type") String type,
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate
@@ -173,5 +174,22 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
     List<StockMovement> findAllMovementsInPeriod(
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate
+    );
+
+    // NEW: Alternative solution using JPQL instead of native query (RECOMMENDED)
+    @Query("""
+        SELECT sm FROM StockMovement sm 
+        WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId)
+        AND (:type IS NULL OR sm.type = :type)
+        AND (:startDate IS NULL OR sm.createdAt >= :startDate)
+        AND (:endDate IS NULL OR sm.createdAt <= :endDate)
+        ORDER BY sm.createdAt DESC
+    """)
+    Page<StockMovement> findStockMovementsJpql(
+            @Param("medicineId") UUID medicineId,
+            @Param("type") StockMovementType type,
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate,
+            Pageable pageable
     );
 }
