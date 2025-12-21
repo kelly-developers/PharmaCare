@@ -41,7 +41,6 @@ public class StockService {
     private final UserRepository userRepository;
     private final ModelMapper modelMapper;
 
-    // Rename one of the methods to avoid ambiguity
     public PaginatedResponse<StockMovementResponse> getStockMovementsWithDates(
             int page, int limit, UUID medicineId,
             StockMovementType type,
@@ -61,24 +60,20 @@ public class StockService {
         return PaginatedResponse.of(movementResponses, page, limit, movementsPage.getTotalElements());
     }
 
-    // Rename the other method
     public PaginatedResponse<StockMovementResponse> getStockMovementsWithDateTimes(
             int page, int limit, UUID medicineId,
             StockMovementType type,
             LocalDateTime startDateTime,
             LocalDateTime endDateTime) {
 
-        // Convert LocalDateTime to LocalDate
         LocalDate startDate = startDateTime != null ? startDateTime.toLocalDate() : null;
         LocalDate endDate = endDateTime != null ? endDateTime.toLocalDate() : null;
 
         return getStockMovementsWithDates(page, limit, medicineId, type, startDate, endDate);
     }
 
-    // Add a simpler method for when dates are not needed
     public PaginatedResponse<StockMovementResponse> getStockMovements(
             int page, int limit, UUID medicineId, StockMovementType type) {
-
         return getStockMovementsWithDates(page, limit, medicineId, type, null, null);
     }
 
@@ -97,11 +92,9 @@ public class StockService {
             newStock = 0;
         }
 
-        // Update medicine stock
         medicine.setStockQuantity(newStock);
         medicineRepository.save(medicine);
 
-        // Create stock movement record
         StockMovement stockMovement = StockMovement.builder()
                 .medicine(medicine)
                 .medicineName(medicine.getName())
@@ -138,11 +131,9 @@ public class StockService {
             newStock = 0;
         }
 
-        // Update medicine stock
         medicine.setStockQuantity(newStock);
         medicineRepository.save(medicine);
 
-        // Create stock movement record
         StockMovement stockMovement = StockMovement.builder()
                 .medicine(medicine)
                 .medicineName(medicine.getName())
@@ -179,11 +170,9 @@ public class StockService {
             newStock = 0;
         }
 
-        // Update medicine stock
         medicine.setStockQuantity(newStock);
         medicineRepository.save(medicine);
 
-        // Create stock movement record
         StockMovement stockMovement = StockMovement.builder()
                 .medicine(medicine)
                 .medicineName(medicine.getName())
@@ -215,11 +204,9 @@ public class StockService {
         int previousStock = medicine.getStockQuantity();
         int newStock = previousStock + request.getQuantity();
 
-        // Update medicine stock
         medicine.setStockQuantity(newStock);
         medicineRepository.save(medicine);
 
-        // Create stock movement record
         StockMovement stockMovement = StockMovement.builder()
                 .medicine(medicine)
                 .medicineName(medicine.getName())

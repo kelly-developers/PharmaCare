@@ -19,31 +19,39 @@ import java.util.UUID;
 public interface StockMovementRepository extends JpaRepository<StockMovement, UUID> {
     Page<StockMovement> findByMedicine(Medicine medicine, Pageable pageable);
 
-    // FIXED: Handle NULL dates properly with CAST
-    @Query("SELECT sm FROM StockMovement sm WHERE " +
-            "(:medicineId IS NULL OR sm.medicine.id = :medicineId) AND " +
-            "(:type IS NULL OR sm.type = :type) AND " +
-            "(:startDate IS NULL OR CAST(sm.createdAt AS date) >= CAST(:startDate AS date)) AND " +  // Fixed: CAST dates
-            "(:endDate IS NULL OR CAST(sm.createdAt AS date) <= CAST(:endDate AS date)) " +
-            "ORDER BY sm.createdAt DESC")
-    Page<StockMovement> findStockMovements(@Param("medicineId") UUID medicineId,
-                                           @Param("type") StockMovementType type,
-                                           @Param("startDate") LocalDate startDate,  // Changed to LocalDate
-                                           @Param("endDate") LocalDate endDate,      // Changed to LocalDate
-                                           Pageable pageable);
+    // FIXED: Handle NULL dates properly with DATE() function
+    @Query("""
+        SELECT sm FROM StockMovement sm 
+        WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId) 
+        AND (:type IS NULL OR sm.type = :type) 
+        AND (:startDate IS NULL OR DATE(sm.createdAt) >= :startDate) 
+        AND (:endDate IS NULL OR DATE(sm.createdAt) <= :endDate) 
+        ORDER BY sm.createdAt DESC
+    """)
+    Page<StockMovement> findStockMovements(
+            @Param("medicineId") UUID medicineId,
+            @Param("type") StockMovementType type,
+            @Param("startDate") LocalDate startDate,
+            @Param("endDate") LocalDate endDate,
+            Pageable pageable
+    );
 
     @Query("SELECT sm FROM StockMovement sm WHERE sm.referenceId = :referenceId")
     List<StockMovement> findByReferenceId(@Param("referenceId") UUID referenceId);
 
     @Query("SELECT SUM(sm.quantity) FROM StockMovement sm WHERE sm.medicine.id = :medicineId " +
             "AND sm.createdAt >= :startDate AND sm.createdAt <= :endDate")
-    Integer getNetMovementForPeriod(@Param("medicineId") UUID medicineId,
-                                    @Param("startDate") LocalDateTime startDate,
-                                    @Param("endDate") LocalDateTime endDate);
+    Integer getNetMovementForPeriod(
+            @Param("medicineId") UUID medicineId,
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
+    );
 
     @Query("SELECT sm.type, SUM(sm.quantity) FROM StockMovement sm WHERE " +
             "sm.createdAt >= :startDate AND sm.createdAt <= :endDate " +
             "GROUP BY sm.type")
-    List<Object[]> getStockMovementSummary(@Param("startDate") LocalDateTime startDate,
-                                           @Param("endDate") LocalDateTime endDate);
+    List<Object[]> getStockMovementSummary(
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
+    );
 }

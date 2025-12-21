@@ -1,6 +1,5 @@
 package com.PharmaCare.pos_backend.repository;
 
-
 import com.PharmaCare.pos_backend.enums.PaymentMethod;
 import com.PharmaCare.pos_backend.model.Sale;
 import com.PharmaCare.pos_backend.model.User;
@@ -21,47 +20,78 @@ import java.util.UUID;
 public interface SaleRepository extends JpaRepository<Sale, UUID> {
     Page<Sale> findByCashier(User cashier, Pageable pageable);
 
-    @Query("SELECT s FROM Sale s WHERE " +
-            "(:startDate IS NULL OR s.createdAt >= :startDate) AND " +
-            "(:endDate IS NULL OR s.createdAt <= :endDate) AND " +
-            "(:cashierId IS NULL OR s.cashier.id = :cashierId) AND " +
-            "(:paymentMethod IS NULL OR s.paymentMethod = :paymentMethod)")
-    Page<Sale> findSalesByCriteria(@Param("startDate") LocalDateTime startDate,
-                                   @Param("endDate") LocalDateTime endDate,
-                                   @Param("cashierId") UUID cashierId,
-                                   @Param("paymentMethod") PaymentMethod paymentMethod,
-                                   Pageable pageable);
+    // FIXED: Simplified query without complex date comparisons
+    @Query("""
+        SELECT s FROM Sale s 
+        WHERE (:startDate IS NULL OR s.createdAt >= :startDate) 
+        AND (:endDate IS NULL OR s.createdAt <= :endDate) 
+        AND (:cashierId IS NULL OR s.cashier.id = :cashierId) 
+        AND (:paymentMethod IS NULL OR s.paymentMethod = :paymentMethod)
+        ORDER BY s.createdAt DESC
+    """)
+    Page<Sale> findSalesByCriteria(
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate,
+            @Param("cashierId") UUID cashierId,
+            @Param("paymentMethod") PaymentMethod paymentMethod,
+            Pageable pageable
+    );
 
-    @Query("SELECT s FROM Sale s WHERE DATE(s.createdAt) = :date")
-    List<Sale> findByDate(@Param("date") LocalDate date);
+    // FIXED: Use LocalDateTime parameters
+    @Query("SELECT s FROM Sale s WHERE s.createdAt >= :startOfDay AND s.createdAt <= :endOfDay")
+    List<Sale> findByDate(
+            @Param("startOfDay") LocalDateTime startOfDay,
+            @Param("endOfDay") LocalDateTime endOfDay
+    );
 
-    @Query("SELECT s FROM Sale s WHERE DATE(s.createdAt) = :date AND s.cashier.id = :cashierId")
-    List<Sale> findByDateAndCashier(@Param("date") LocalDate date, @Param("cashierId") UUID cashierId);
+    // FIXED: Use LocalDateTime parameters
+    @Query("SELECT s FROM Sale s WHERE s.createdAt >= :startOfDay AND s.createdAt <= :endOfDay AND s.cashier.id = :cashierId")
+    List<Sale> findByDateAndCashier(
+            @Param("startOfDay") LocalDateTime startOfDay,
+            @Param("endOfDay") LocalDateTime endOfDay,
+            @Param("cashierId") UUID cashierId
+    );
 
-    @Query("SELECT SUM(s.total) FROM Sale s WHERE DATE(s.createdAt) = :date")
-    BigDecimal getTotalSalesForDate(@Param("date") LocalDate date);
+    @Query("SELECT SUM(s.total) FROM Sale s WHERE s.createdAt >= :startOfDay AND s.createdAt <= :endOfDay")
+    BigDecimal getTotalSalesForDate(
+            @Param("startOfDay") LocalDateTime startOfDay,
+            @Param("endOfDay") LocalDateTime endOfDay
+    );
 
-    @Query("SELECT SUM(s.total) FROM Sale s WHERE DATE(s.createdAt) = :date AND s.cashier.id = :cashierId")
-    BigDecimal getTotalSalesForDateAndCashier(@Param("date") LocalDate date, @Param("cashierId") UUID cashierId);
+    @Query("SELECT SUM(s.total) FROM Sale s WHERE s.createdAt >= :startOfDay AND s.createdAt <= :endOfDay AND s.cashier.id = :cashierId")
+    BigDecimal getTotalSalesForDateAndCashier(
+            @Param("startOfDay") LocalDateTime startOfDay,
+            @Param("endOfDay") LocalDateTime endOfDay,
+            @Param("cashierId") UUID cashierId
+    );
 
-    @Query("SELECT COUNT(s) FROM Sale s WHERE DATE(s.createdAt) = :date")
-    long countSalesForDate(@Param("date") LocalDate date);
+    @Query("SELECT COUNT(s) FROM Sale s WHERE s.createdAt >= :startOfDay AND s.createdAt <= :endOfDay")
+    long countSalesForDate(
+            @Param("startOfDay") LocalDateTime startOfDay,
+            @Param("endOfDay") LocalDateTime endOfDay
+    );
 
     @Query("SELECT s.paymentMethod, SUM(s.total) as amount FROM Sale s WHERE " +
             "s.createdAt >= :startDate AND s.createdAt <= :endDate " +
             "GROUP BY s.paymentMethod")
-    List<Object[]> getSalesByPaymentMethod(@Param("startDate") LocalDateTime startDate,
-                                           @Param("endDate") LocalDateTime endDate);
+    List<Object[]> getSalesByPaymentMethod(
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
+    );
 
     @Query("SELECT si.medicineName, SUM(si.quantity) as quantity, SUM(si.totalPrice) as amount " +
             "FROM SaleItem si WHERE si.sale.createdAt >= :startDate AND si.sale.createdAt <= :endDate " +
             "GROUP BY si.medicineName ORDER BY quantity DESC")
-    List<Object[]> getTopSellingItems(@Param("startDate") LocalDateTime startDate,
-                                      @Param("endDate") LocalDateTime endDate);
+    List<Object[]> getTopSellingItems(
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
+    );
 
     @Query("SELECT FUNCTION('DATE', s.createdAt), SUM(s.total) as dailySales " +
             "FROM Sale s WHERE s.createdAt >= :startDate AND s.createdAt <= :endDate " +
             "GROUP BY FUNCTION('DATE', s.createdAt) ORDER BY FUNCTION('DATE', s.createdAt)")
-    List<Object[]> getDailySales(@Param("startDate") LocalDateTime startDate,
-                                 @Param("endDate") LocalDateTime endDate);
+    List<Object[]> getDailySales(
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
+    );
 }

@@ -50,7 +50,6 @@ public class SaleService {
     private final SaleItemRepository saleItemRepository;
     private final UserRepository userRepository;
     private final MedicineRepository medicineRepository;
-    private final MedicineService medicineService;
     private final StockService stockService;
     private final ModelMapper modelMapper;
 
@@ -80,11 +79,9 @@ public class SaleService {
 
     @Transactional
     public SaleResponse createSale(SaleRequest request) {
-        // Validate cashier exists
         User cashier = userRepository.findById(request.getCashierId())
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getCashierId()));
 
-        // Create sale
         Sale sale = Sale.builder()
                 .subtotal(request.getSubtotal())
                 .discount(request.getDiscount() != null ? request.getDiscount() : BigDecimal.ZERO)
@@ -100,14 +97,11 @@ public class SaleService {
 
         Sale savedSale = saleRepository.save(sale);
 
-        // Create sale items and deduct stock
         List<SaleItem> saleItems = new ArrayList<>();
         for (SaleRequest.SaleItemRequest itemRequest : request.getItems()) {
-            // Fetch the medicine entity
             Medicine medicine = medicineRepository.findById(itemRequest.getMedicineId())
                     .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", itemRequest.getMedicineId()));
 
-            // Create the SaleItem with all required fields
             SaleItem saleItem = SaleItem.builder()
                     .sale(savedSale)
                     .medicine(medicine)
@@ -121,7 +115,6 @@ public class SaleService {
 
             saleItems.add(saleItem);
 
-            // Create StockDeductionRequest (without medicineId)
             StockDeductionRequest deductionRequest = new StockDeductionRequest(
                     itemRequest.getQuantity(),
                     itemRequest.getUnitType(),
@@ -131,10 +124,8 @@ public class SaleService {
             );
 
             try {
-                // Pass medicineId separately and the deductionRequest
                 stockService.deductStock(itemRequest.getMedicineId(), deductionRequest);
             } catch (Exception e) {
-                // Rollback sale creation if stock deduction fails
                 saleRepository.delete(savedSale);
                 throw new ApiException("Failed to deduct stock for medicine: " + itemRequest.getMedicineName(),
                         e, HttpStatus.BAD_REQUEST);
@@ -152,7 +143,6 @@ public class SaleService {
         LocalDateTime startDateTime = startDate.atStartOfDay();
         LocalDateTime endDateTime = endDate.atTime(LocalTime.MAX);
 
-        // Get total sales and cost
         List<Sale> sales = saleRepository.findSalesByCriteria(
                 startDateTime, endDateTime, null, null, PageRequest.of(0, Integer.MAX_VALUE)).getContent();
 
@@ -172,7 +162,6 @@ public class SaleService {
         double profitMargin = totalSales.compareTo(BigDecimal.ZERO) > 0 ?
                 grossProfit.divide(totalSales, 4, RoundingMode.HALF_UP).doubleValue() * 100 : 0;
 
-        // Get sales by payment method
         List<Object[]> paymentMethodData = saleRepository.getSalesByPaymentMethod(startDateTime, endDateTime);
         Map<String, BigDecimal> byPaymentMethod = new HashMap<>();
         for (Object[] data : paymentMethodData) {
@@ -181,18 +170,29 @@ public class SaleService {
             byPaymentMethod.put(method.name(), amount);
         }
 
-        // Get daily breakdown
         List<Object[]> dailyData = saleRepository.getDailySales(startDateTime, endDateTime);
         List<SalesSummary.DailySales> dailyBreakdown = dailyData.stream()
-                .map(data -> SalesSummary.DailySales.builder()
-                        .date(((java.sql.Date) data[0]).toLocalDate())
-                        .sales((BigDecimal) data[1])
-                        .profit(((BigDecimal) data[1]).multiply(BigDecimal.valueOf(0.3)))
-                        .transactions(0)
-                        .build())
+                .map(data -> {
+                    try {
+                        LocalDate date = ((java.sql.Date) data[0]).toLocalDate();
+                        BigDecimal salesAmount = (BigDecimal) data[1];
+                        return SalesSummary.DailySales.builder()
+                                .date(date)
+                                .sales(salesAmount)
+                                .profit(salesAmount.multiply(BigDecimal.valueOf(0.3)))
+                                .transactions(0)
+                                .build();
+                    } catch (Exception e) {
+                        return SalesSummary.DailySales.builder()
+                                .date(LocalDate.now())
+                                .sales(BigDecimal.ZERO)
+                                .profit(BigDecimal.ZERO)
+                                .transactions(0)
+                                .build();
+                    }
+                })
                 .collect(Collectors.toList());
 
-        // Get top selling items
         List<Object[]> topItems = saleRepository.getTopSellingItems(startDateTime, endDateTime);
         List<SalesSummary.CategorySales> byCategory = new ArrayList<>();
 
@@ -209,36 +209,43 @@ public class SaleService {
 
     public DashboardSummary getTodaySalesSummary(UUID cashierId) {
         LocalDate today = LocalDate.now();
+        LocalDateTime startOfDay = today.atStartOfDay();
+        LocalDateTime endOfDay = today.atTime(LocalTime.MAX);
+
         BigDecimal totalAmount;
         long totalTransactions;
 
         if (cashierId != null) {
-            totalAmount = saleRepository.getTotalSalesForDateAndCashier(today, cashierId);
-            totalTransactions = saleRepository.findByDateAndCashier(today, cashierId).size();
+            totalAmount = saleRepository.getTotalSalesForDateAndCashier(startOfDay, endOfDay, cashierId);
+            if (totalAmount == null) totalAmount = BigDecimal.ZERO;
+
+            List<Sale> cashierSales = saleRepository.findByDateAndCashier(startOfDay, endOfDay, cashierId);
+            totalTransactions = cashierSales != null ? cashierSales.size() : 0;
         } else {
-            totalAmount = saleRepository.getTotalSalesForDate(today);
-            totalTransactions = saleRepository.countSalesForDate(today);
+            totalAmount = saleRepository.getTotalSalesForDate(startOfDay, endOfDay);
+            if (totalAmount == null) totalAmount = BigDecimal.ZERO;
+
+            totalTransactions = saleRepository.countSalesForDate(startOfDay, endOfDay);
         }
 
-        // Get breakdown by payment method
         List<Sale> todaySales = cashierId != null ?
-                saleRepository.findByDateAndCashier(today, cashierId) :
-                saleRepository.findByDate(today);
+                saleRepository.findByDateAndCashier(startOfDay, endOfDay, cashierId) :
+                saleRepository.findByDate(startOfDay, endOfDay);
 
         Map<PaymentMethod, BigDecimal> paymentMethodAmounts = new HashMap<>();
         Map<PaymentMethod, Integer> paymentMethodCounts = new HashMap<>();
 
-        for (Sale sale : todaySales) {
-            paymentMethodAmounts.merge(sale.getPaymentMethod(), sale.getTotal(), BigDecimal::add);
-            paymentMethodCounts.merge(sale.getPaymentMethod(), 1, Integer::sum);
+        if (todaySales != null) {
+            for (Sale sale : todaySales) {
+                paymentMethodAmounts.merge(sale.getPaymentMethod(), sale.getTotal(), BigDecimal::add);
+                paymentMethodCounts.merge(sale.getPaymentMethod(), 1, Integer::sum);
+            }
         }
 
-        // Calculate profit (simplified - would need actual cost data)
-        BigDecimal totalProfit = totalAmount != null ?
-                totalAmount.multiply(BigDecimal.valueOf(0.3)) : BigDecimal.ZERO;
+        BigDecimal totalProfit = totalAmount.multiply(BigDecimal.valueOf(0.3));
 
         return DashboardSummary.builder()
-                .todaySales(totalAmount != null ? totalAmount : BigDecimal.ZERO)
+                .todaySales(totalAmount)
                 .todayTransactions((int) totalTransactions)
                 .todayProfit(totalProfit)
                 .totalStockItems(0)
@@ -295,7 +302,6 @@ public class SaleService {
     private SaleResponse mapToSaleResponse(Sale sale) {
         SaleResponse response = modelMapper.map(sale, SaleResponse.class);
 
-        // Map sale items
         List<SaleResponse.SaleItemResponse> itemResponses = sale.getItems().stream()
                 .map(item -> {
                     SaleResponse.SaleItemResponse itemResponse = new SaleResponse.SaleItemResponse();

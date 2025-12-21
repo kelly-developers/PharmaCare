@@ -44,9 +44,9 @@ public class ReportService {
         LocalDateTime startOfDay = today.atStartOfDay();
         LocalDateTime endOfDay = today.atTime(LocalTime.MAX);
 
-        // Today's sales
-        BigDecimal todaySales = saleRepository.getTotalSalesForDate(today);
-        long todayTransactions = saleRepository.countSalesForDate(today);
+        // Today's sales - FIXED: Use LocalDateTime parameters
+        BigDecimal todaySales = saleRepository.getTotalSalesForDate(startOfDay, endOfDay);
+        long todayTransactions = saleRepository.countSalesForDate(startOfDay, endOfDay);
 
         // Today's profit (simplified - assuming 30% profit margin)
         BigDecimal todayProfit = todaySales != null ?
