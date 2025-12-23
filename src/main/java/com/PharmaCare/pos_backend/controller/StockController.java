@@ -29,6 +29,9 @@ public class StockController {
 
     private final StockService stockService;
 
+    /**
+     * GET /api/stock/movements - Main endpoint for stock movements
+     */
     @GetMapping("/movements")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ResponseEntity<ApiResponse<PaginatedResponse<StockMovementResponse>>> getStockMovements(
@@ -42,15 +45,19 @@ public class StockController {
         try {
             PaginatedResponse<StockMovementResponse> movements = stockService.getStockMovementsWithDates(
                     page, limit, medicineId, type, startDate, endDate);
-            return ResponseEntity.ok(ApiResponse.success(movements));
+
+            return ResponseEntity.ok(ApiResponse.success(movements, "Stock movements fetched successfully"));
+
         } catch (Exception e) {
             log.error("Error fetching stock movements: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<PaginatedResponse<StockMovementResponse>>error(
-                            "Failed to fetch stock movements: " + e.getMessage()));
+                    .body(ApiResponse.error("Failed to fetch stock movements. Please try again."));
         }
     }
 
+    /**
+     * POST /api/stock/loss - Record stock loss
+     */
     @PostMapping("/loss")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ResponseEntity<ApiResponse<StockMovementResponse>> recordStockLoss(
@@ -61,12 +68,14 @@ public class StockController {
             return ResponseEntity.ok(ApiResponse.success(movement, "Stock loss recorded successfully"));
         } catch (Exception e) {
             log.error("Error recording stock loss: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<StockMovementResponse>error(
-                            "Failed to record stock loss: " + e.getMessage()));
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(ApiResponse.error("Failed to record stock loss: " + e.getMessage()));
         }
     }
 
+    /**
+     * POST /api/stock/adjustment - Record stock adjustment
+     */
     @PostMapping("/adjustment")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ResponseEntity<ApiResponse<StockMovementResponse>> recordStockAdjustment(
@@ -77,12 +86,14 @@ public class StockController {
             return ResponseEntity.ok(ApiResponse.success(movement, "Stock adjustment recorded successfully"));
         } catch (Exception e) {
             log.error("Error recording stock adjustment: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<StockMovementResponse>error(
-                            "Failed to record stock adjustment: " + e.getMessage()));
+            return ResponseEntity.status(HttpStatus.BAD_REQUEST)
+                    .body(ApiResponse.error("Failed to record stock adjustment: " + e.getMessage()));
         }
     }
 
+    /**
+     * GET /api/stock/movements/medicine/{medicineId} - Get movements by medicine
+     */
     @GetMapping("/movements/medicine/{medicineId}")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ResponseEntity<ApiResponse<PaginatedResponse<StockMovementResponse>>> getStockMovementsByMedicine(
@@ -93,29 +104,72 @@ public class StockController {
         try {
             PaginatedResponse<StockMovementResponse> movements = stockService.getStockMovements(
                     page, limit, medicineId, null);
-            return ResponseEntity.ok(ApiResponse.success(movements));
+            return ResponseEntity.ok(ApiResponse.success(movements, "Stock movements fetched successfully"));
         } catch (Exception e) {
             log.error("Error fetching stock movements by medicine: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<PaginatedResponse<StockMovementResponse>>error(
-                            "Failed to fetch stock movements: " + e.getMessage()));
+                    .body(ApiResponse.error("Failed to fetch stock movements for this medicine"));
         }
     }
 
+    /**
+     * GET /api/stock/movements/reference/{referenceId} - Get movements by reference
+     */
     @GetMapping("/movements/reference/{referenceId}")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    public ResponseEntity<ApiResponse<List<StockMovementResponse>>> getStockMovementsByReference(@PathVariable UUID referenceId) {
+    public ResponseEntity<ApiResponse<List<StockMovementResponse>>> getStockMovementsByReference(
+            @PathVariable UUID referenceId) {
+
         try {
             List<StockMovementResponse> movements = stockService.getStockMovementsByReference(referenceId);
-            return ResponseEntity.ok(ApiResponse.success(movements));
+            return ResponseEntity.ok(ApiResponse.success(movements, "Stock movements fetched successfully"));
         } catch (Exception e) {
             log.error("Error fetching stock movements by reference: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<List<StockMovementResponse>>error(
-                            "Failed to fetch stock movements: " + e.getMessage()));
+                    .body(ApiResponse.error("Failed to fetch stock movements for this reference"));
         }
     }
 
+    /**
+     * GET /api/stock/monthly - Monthly stock summary (optimized)
+     */
+    @GetMapping("/monthly")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> getMonthlyStockSummary(
+            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM") String month) {
+
+        try {
+            // If no month specified, use current month
+            YearMonth yearMonth = (month != null && !month.isEmpty())
+                    ? YearMonth.parse(month)
+                    : YearMonth.now();
+
+            LocalDate startOfMonth = yearMonth.atDay(1);
+            LocalDate endOfMonth = yearMonth.atEndOfMonth();
+
+            // Get summary statistics using optimized query
+            Map<String, Object> summary = stockService.getStockSummaryForPeriod(startOfMonth, endOfMonth);
+
+            // Add additional metadata
+            Map<String, Object> response = new HashMap<>();
+            response.put("month", yearMonth.toString());
+            response.put("startDate", startOfMonth);
+            response.put("endDate", endOfMonth);
+            response.put("summary", summary);
+            response.put("generatedAt", LocalDateTime.now());
+
+            return ResponseEntity.ok(ApiResponse.success(response, "Monthly stock summary generated successfully"));
+
+        } catch (Exception e) {
+            log.error("Error generating monthly stock summary: {}", e.getMessage(), e);
+            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                    .body(ApiResponse.error("Failed to generate monthly stock summary"));
+        }
+    }
+
+    /**
+     * GET /api/stock/net-movement/{medicineId} - Get net movement for period
+     */
     @GetMapping("/net-movement/{medicineId}")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
     public ResponseEntity<ApiResponse<Map<String, Object>>> getNetMovement(
@@ -132,202 +186,23 @@ public class StockController {
             result.put("periodStartDate", startDate);
             result.put("periodEndDate", endDate);
 
-            return ResponseEntity.ok(ApiResponse.success(result));
+            return ResponseEntity.ok(ApiResponse.success(result, "Net movement calculated successfully"));
         } catch (Exception e) {
             log.error("Error calculating net movement: {}", e.getMessage(), e);
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<Map<String, Object>>error(
-                            "Failed to calculate net movement: " + e.getMessage()));
+                    .body(ApiResponse.error("Failed to calculate net movement"));
         }
     }
 
-    // FIXED: Monthly stock summary using LocalDateTime instead of DATE() function
-    @GetMapping("/monthly")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getMonthlyStockSummary(
-            @RequestParam(required = false) @DateTimeFormat(pattern = "yyyy-MM") String month) {
-        try {
-            // If no month specified, use current month
-            YearMonth yearMonth = month != null ? YearMonth.parse(month) : YearMonth.now();
-
-            LocalDate startOfMonth = yearMonth.atDay(1);
-            LocalDate endOfMonth = yearMonth.atEndOfMonth();
-
-            // Convert to LocalDateTime for proper query
-            LocalDateTime startDateTime = startOfMonth.atStartOfDay();
-            LocalDateTime endDateTime = endOfMonth.atTime(23, 59, 59);
-
-            Map<String, Object> summary = new HashMap<>();
-            summary.put("month", yearMonth.toString());
-            summary.put("startDate", startOfMonth);
-            summary.put("endDate", endOfMonth);
-
-            // Get stock movements using the new method that handles LocalDateTime
-            List<StockMovementResponse> items = stockService.getStockMovementsForMonthlySummary(
-                    null, null, startDateTime, endDateTime);
-
-            // Calculate summary statistics
-            long totalMovements = items.size();
-
-            long purchaseMovements = items.stream()
-                    .filter(m -> m.getType() == StockMovementType.PURCHASE)
-                    .count();
-            long saleMovements = items.stream()
-                    .filter(m -> m.getType() == StockMovementType.SALE)
-                    .count();
-            long adjustmentMovements = items.stream()
-                    .filter(m -> m.getType() == StockMovementType.ADJUSTMENT)
-                    .count();
-            long lossMovements = items.stream()
-                    .filter(m -> m.getType() == StockMovementType.LOSS)
-                    .count();
-
-            // Calculate total quantities
-            int totalPurchased = items.stream()
-                    .filter(m -> m.getType() == StockMovementType.PURCHASE)
-                    .mapToInt(StockMovementResponse::getQuantity)
-                    .sum();
-            int totalSold = items.stream()
-                    .filter(m -> m.getType() == StockMovementType.SALE)
-                    .mapToInt(m -> Math.abs(m.getQuantity()))
-                    .sum();
-            int totalAdjusted = items.stream()
-                    .filter(m -> m.getType() == StockMovementType.ADJUSTMENT)
-                    .mapToInt(StockMovementResponse::getQuantity)
-                    .sum();
-            int totalLost = items.stream()
-                    .filter(m -> m.getType() == StockMovementType.LOSS)
-                    .mapToInt(m -> Math.abs(m.getQuantity()))
-                    .sum();
-
-            // Create maps without using Map.of() to avoid type issues
-            Map<String, Long> movementCounts = new HashMap<>();
-            movementCounts.put("purchases", purchaseMovements);
-            movementCounts.put("sales", saleMovements);
-            movementCounts.put("adjustments", adjustmentMovements);
-            movementCounts.put("losses", lossMovements);
-
-            Map<String, Integer> quantityTotals = new HashMap<>();
-            quantityTotals.put("purchased", totalPurchased);
-            quantityTotals.put("sold", totalSold);
-            quantityTotals.put("adjusted", totalAdjusted);
-            quantityTotals.put("lost", totalLost);
-
-            summary.put("totalMovements", totalMovements);
-            summary.put("movementCounts", movementCounts);
-            summary.put("quantityTotals", quantityTotals);
-
-            // Group by medicine (top 10)
-            Map<String, Integer> medicineSummary = new HashMap<>();
-            items.forEach(movement -> {
-                String medicineName = movement.getMedicineName();
-                int quantity = Math.abs(movement.getQuantity());
-                medicineSummary.merge(medicineName, quantity, Integer::sum);
-            });
-
-            // Sort by quantity and get top 10
-            List<Map<String, Object>> topMedicines = new ArrayList<>();
-            medicineSummary.entrySet().stream()
-                    .sorted((a, b) -> b.getValue().compareTo(a.getValue()))
-                    .limit(10)
-                    .forEach(entry -> {
-                        Map<String, Object> med = new HashMap<>();
-                        med.put("medicineName", entry.getKey());
-                        med.put("totalQuantity", entry.getValue());
-                        topMedicines.add(med);
-                    });
-
-            summary.put("topMedicines", topMedicines);
-            summary.put("generatedAt", LocalDateTime.now());
-
-            return ResponseEntity.ok(ApiResponse.success(summary));
-
-        } catch (Exception e) {
-            log.error("Error generating monthly stock summary: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<Map<String, Object>>error(
-                            "Failed to generate monthly stock summary: " + e.getMessage()));
-        }
-    }
-
-    // NEW ENDPOINT: Stock audit report
-    @GetMapping("/audit")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getStockAuditReport() {
-        try {
-            Map<String, Object> report = new HashMap<>();
-            report.put("message", "Stock audit report endpoint");
-            report.put("data", Collections.emptyList());
-            report.put("generatedAt", LocalDateTime.now());
-
-            return ResponseEntity.ok(ApiResponse.success(report));
-        } catch (Exception e) {
-            log.error("Error generating stock audit report: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<Map<String, Object>>error(
-                            "Failed to generate audit report: " + e.getMessage()));
-        }
-    }
-
-    // NEW ENDPOINT: Stock comparison for a specific month
-    @GetMapping("/comparison/{month}")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> getStockComparison(@PathVariable String month) {
-        try {
-            YearMonth yearMonth = YearMonth.parse(month);
-
-            Map<String, Object> comparison = new HashMap<>();
-            comparison.put("month", month);
-            comparison.put("message", "Stock comparison data for " + month);
-            comparison.put("data", Collections.emptyList());
-            comparison.put("generatedAt", LocalDateTime.now());
-
-            return ResponseEntity.ok(ApiResponse.success(comparison));
-        } catch (Exception e) {
-            log.error("Error generating stock comparison: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<Map<String, Object>>error(
-                            "Failed to generate stock comparison: " + e.getMessage()));
-        }
-    }
-
-    // NEW ENDPOINT: Simple placeholder for opening stock upload
-    @PostMapping("/opening")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> uploadOpeningStock(@RequestBody Map<String, Object> request) {
-        try {
-            Map<String, Object> response = new HashMap<>();
-            response.put("message", "Opening stock uploaded successfully");
-            response.put("month", request.get("month"));
-            response.put("itemsCount", ((List<?>) request.getOrDefault("items", Collections.emptyList())).size());
-            response.put("uploadedAt", LocalDateTime.now());
-
-            return ResponseEntity.ok(ApiResponse.success(response));
-        } catch (Exception e) {
-            log.error("Error uploading opening stock: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<Map<String, Object>>error(
-                            "Failed to upload opening stock: " + e.getMessage()));
-        }
-    }
-
-    // NEW ENDPOINT: Simple placeholder for closing stock upload
-    @PostMapping("/closing")
-    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
-    public ResponseEntity<ApiResponse<Map<String, Object>>> uploadClosingStock(@RequestBody Map<String, Object> request) {
-        try {
-            Map<String, Object> response = new HashMap<>();
-            response.put("message", "Closing stock uploaded successfully");
-            response.put("month", request.get("month"));
-            response.put("itemsCount", ((List<?>) request.getOrDefault("items", Collections.emptyList())).size());
-            response.put("uploadedAt", LocalDateTime.now());
-
-            return ResponseEntity.ok(ApiResponse.success(response));
-        } catch (Exception e) {
-            log.error("Error uploading closing stock: {}", e.getMessage(), e);
-            return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
-                    .body(ApiResponse.<Map<String, Object>>error(
-                            "Failed to upload closing stock: " + e.getMessage()));
-        }
+    /**
+     * Health check endpoint for stock module
+     */
+    @GetMapping("/health")
+    public ResponseEntity<ApiResponse<Map<String, Object>>> healthCheck() {
+        Map<String, Object> health = new HashMap<>();
+        health.put("status", "OK");
+        health.put("timestamp", LocalDateTime.now());
+        health.put("service", "Stock Management");
+        return ResponseEntity.ok(ApiResponse.success(health));
     }
 }

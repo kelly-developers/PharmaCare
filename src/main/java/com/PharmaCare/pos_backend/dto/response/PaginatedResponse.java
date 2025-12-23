@@ -5,6 +5,8 @@ import lombok.Builder;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 
 @Data
@@ -41,5 +43,29 @@ public class PaginatedResponse<T> {
                         .hasPrev(page > 1)
                         .build())
                 .build();
+    }
+
+    /**
+     * Creates an empty paginated response
+     */
+    public static <T> PaginatedResponse<T> empty(int page, int limit) {
+        return PaginatedResponse.<T>builder()
+                .data(Collections.emptyList())
+                .pagination(PaginationInfo.builder()
+                        .page(page)
+                        .limit(limit)
+                        .total(0)
+                        .pages(0)
+                        .hasNext(false)
+                        .hasPrev(false)
+                        .build())
+                .build();
+    }
+
+    /**
+     * Creates an empty paginated response with default page and limit
+     */
+    public static <T> PaginatedResponse<T> empty() {
+        return empty(1, 20);
     }
 }
