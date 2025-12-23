@@ -84,14 +84,7 @@ public class User implements UserDetails {
         return active;
     }
 
-    // REMOVE THESE METHODS - They cause ambiguity!
-    // public boolean getIsActive() {
-    //     return active;
-    // }
-    //
-    // public void setIsActive(boolean active) {
-    //     this.active = active;
-    // }
+
 
     // Add this method if you need to access it as isActive
     @Transient  // This tells JPA not to map it to database

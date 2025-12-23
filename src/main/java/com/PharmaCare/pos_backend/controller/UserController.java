@@ -62,15 +62,15 @@ public class UserController {
     @DeleteMapping("/{id}")
     @PreAuthorize("hasRole('ADMIN')")
     public ResponseEntity<ApiResponse<Void>> deleteUser(@PathVariable UUID id) {
-        userService.deleteUser(id);
+        userService.deactivateUser(id);
         return ResponseEntity.ok(ApiResponse.success(null, "User deactivated successfully"));
     }
 
     @PatchMapping("/{id}/activate")
     @PreAuthorize("hasRole('ADMIN')")
-    public ResponseEntity<ApiResponse<Void>> activateUser(@PathVariable UUID id) {
-        userService.activateUser(id);
-        return ResponseEntity.ok(ApiResponse.success(null, "User activated successfully"));
+    public ResponseEntity<ApiResponse<UserResponse>> activateUser(@PathVariable UUID id) {
+        UserResponse user = userService.activateUser(id);
+        return ResponseEntity.ok(ApiResponse.success(user, "User activated successfully"));
     }
 
     @GetMapping("/profile")

@@ -56,14 +56,16 @@ public class UserService {
 
     @Transactional
     public UserResponse createUser(UserRequest request) {
+        // Check if email already exists
         if (userRepository.existsByEmail(request.getEmail())) {
             throw new ApiException("Email already registered", HttpStatus.BAD_REQUEST);
         }
 
+        // Create new user with encoded password
         User user = User.builder()
                 .name(request.getName())
                 .email(request.getEmail())
-                .password(passwordEncoder.encode("defaultPassword123"))
+                .password(passwordEncoder.encode(request.getPassword())) // Encode the password
                 .role(request.getRole())
                 .phone(request.getPhone())
                 .active(request.getIsActive() != null ? request.getIsActive() : true)
@@ -71,6 +73,8 @@ public class UserService {
 
         User savedUser = userRepository.save(user);
         log.info("User created with ID: {}", savedUser.getId());
+        log.info("User details - Name: {}, Email: {}, Role: {}",
+                savedUser.getName(), savedUser.getEmail(), savedUser.getRole());
 
         return mapToUserResponse(savedUser);
     }
@@ -80,15 +84,22 @@ public class UserService {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", id));
 
+        // Check if email is being changed and if new email already exists
         if (!user.getEmail().equals(request.getEmail()) &&
                 userRepository.existsByEmail(request.getEmail())) {
             throw new ApiException("Email already registered", HttpStatus.BAD_REQUEST);
         }
 
+        // Update user fields
         user.setName(request.getName());
         user.setEmail(request.getEmail());
         user.setRole(request.getRole());
         user.setPhone(request.getPhone());
+
+        // Update password if provided
+        if (request.getPassword() != null && !request.getPassword().trim().isEmpty()) {
+            user.setPassword(passwordEncoder.encode(request.getPassword()));
+        }
 
         if (request.getIsActive() != null) {
             user.setActive(request.getIsActive());
@@ -101,7 +112,7 @@ public class UserService {
     }
 
     @Transactional
-    public void deleteUser(UUID id) {
+    public void deactivateUser(UUID id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", id));
 
@@ -112,14 +123,15 @@ public class UserService {
     }
 
     @Transactional
-    public void activateUser(UUID id) {
+    public UserResponse activateUser(UUID id) {
         User user = userRepository.findById(id)
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", id));
 
         user.setActive(true);
-        userRepository.save(user);
+        User activatedUser = userRepository.save(user);
 
         log.info("User activated with ID: {}", id);
+        return mapToUserResponse(activatedUser);
     }
 
     public UserResponse getCurrentUserProfile() {
@@ -131,9 +143,15 @@ public class UserService {
     public UserResponse updateCurrentUserProfile(UserRequest request) {
         User currentUser = getCurrentUser();
 
+        // Only allow updating name and phone for current user
         currentUser.setName(request.getName());
         if (request.getPhone() != null) {
             currentUser.setPhone(request.getPhone());
+        }
+
+        // Update password if provided
+        if (request.getPassword() != null && !request.getPassword().trim().isEmpty()) {
+            currentUser.setPassword(passwordEncoder.encode(request.getPassword()));
         }
 
         User updatedUser = userRepository.save(currentUser);
@@ -141,7 +159,8 @@ public class UserService {
     }
 
     public List<UserResponse> getUsersByRole(Role role) {
-        List<User> users = userRepository.findAllByRole(role, PageRequest.of(0, 100)).getContent();
+        Pageable pageable = PageRequest.of(0, 100, Sort.by("name"));
+        List<User> users = userRepository.findAllByRole(role, pageable).getContent();
         return users.stream()
                 .map(this::mapToUserResponse)
                 .collect(Collectors.toList());
