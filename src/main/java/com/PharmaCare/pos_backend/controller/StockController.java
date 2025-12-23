@@ -31,6 +31,7 @@ public class StockController {
 
     /**
      * GET /api/stock/movements - Main endpoint for stock movements
+     * FIXED: This was causing the "could not determine data type of parameter" error
      */
     @GetMapping("/movements")
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
@@ -43,6 +44,9 @@ public class StockController {
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate endDate) {
 
         try {
+            log.info("Fetching stock movements - page: {}, limit: {}, medicineId: {}, type: {}, startDate: {}, endDate: {}",
+                    page, limit, medicineId, type, startDate, endDate);
+
             PaginatedResponse<StockMovementResponse> movements = stockService.getStockMovementsWithDates(
                     page, limit, medicineId, type, startDate, endDate);
 

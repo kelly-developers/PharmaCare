@@ -8,7 +8,6 @@ import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
 import com.PharmaCare.pos_backend.dto.response.StockMovementResponse;
 import com.PharmaCare.pos_backend.enums.Role;
 import com.PharmaCare.pos_backend.enums.StockMovementType;
-import com.PharmaCare.pos_backend.enums.UnitType;
 import com.PharmaCare.pos_backend.model.Medicine;
 import com.PharmaCare.pos_backend.model.StockMovement;
 import com.PharmaCare.pos_backend.model.User;
@@ -43,7 +42,7 @@ public class StockService {
 
     /**
      * Main method for getting stock movements with filters
-     * Uses JPQL to avoid UUID casting issues
+     * Uses native SQL to avoid PostgreSQL parameter type issues
      */
     public PaginatedResponse<StockMovementResponse> getStockMovementsWithDates(
             int page, int limit, UUID medicineId,
@@ -52,28 +51,68 @@ public class StockService {
             LocalDate endDate) {
 
         try {
-            Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("createdAt").descending());
+            // Calculate offset and limit for native query
+            int offset = (page - 1) * limit;
 
             // Convert LocalDate to LocalDateTime for proper query
             LocalDateTime startDateTime = startDate != null ? startDate.atStartOfDay() : null;
             LocalDateTime endDateTime = endDate != null ? endDate.atTime(23, 59, 59) : null;
 
-            // Use the JPQL method that handles UUID properly
-            Page<StockMovement> movementsPage = stockMovementRepository.findStockMovementsWithFilters(
-                    medicineId, type, startDateTime, endDateTime, pageable);
+            // Convert StockMovementType to string for native query
+            String typeStr = type != null ? type.name() : null;
 
-            List<StockMovementResponse> movementResponses = movementsPage.getContent()
-                    .stream()
+            // Get total count first
+            long totalElements = stockMovementRepository.countStockMovementsWithFilters(
+                    medicineId, typeStr, startDateTime, endDateTime);
+
+            // Get paginated data using native query
+            List<StockMovement> movements = stockMovementRepository.findStockMovementsWithFiltersNative(
+                    medicineId, typeStr, startDateTime, endDateTime, offset, limit);
+
+            List<StockMovementResponse> movementResponses = movements.stream()
                     .map(this::mapToStockMovementResponse)
                     .collect(Collectors.toList());
 
-            return PaginatedResponse.of(movementResponses, page, limit, movementsPage.getTotalElements());
+            // Use your existing PaginatedResponse.of() method
+            return PaginatedResponse.of(movementResponses, page, limit, totalElements);
 
         } catch (Exception e) {
             log.error("Error fetching stock movements: {}", e.getMessage(), e);
-            // Return empty response instead of throwing
-            return PaginatedResponse.empty(page, limit);
+            // Fallback to JPQL if native query fails
+            try {
+                return getStockMovementsWithFiltersFallback(page, limit, medicineId, type, startDate, endDate);
+            } catch (Exception ex) {
+                log.error("Fallback also failed: {}", ex.getMessage(), ex);
+                return PaginatedResponse.empty(page, limit);
+            }
         }
+    }
+
+    /**
+     * Fallback method using JPQL if native query fails
+     */
+    private PaginatedResponse<StockMovementResponse> getStockMovementsWithFiltersFallback(
+            int page, int limit, UUID medicineId,
+            StockMovementType type,
+            LocalDate startDate,
+            LocalDate endDate) {
+
+        Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("createdAt").descending());
+
+        // Convert LocalDate to LocalDateTime for proper query
+        LocalDateTime startDateTime = startDate != null ? startDate.atStartOfDay() : null;
+        LocalDateTime endDateTime = endDate != null ? endDate.atTime(23, 59, 59) : null;
+
+        // Use the JPQL method that handles UUID properly
+        Page<StockMovement> movementsPage = stockMovementRepository.findStockMovementsWithFilters(
+                medicineId, type, startDateTime, endDateTime, pageable);
+
+        List<StockMovementResponse> movementResponses = movementsPage.getContent()
+                .stream()
+                .map(this::mapToStockMovementResponse)
+                .collect(Collectors.toList());
+
+        return PaginatedResponse.of(movementResponses, page, limit, movementsPage.getTotalElements());
     }
 
     /**
@@ -243,11 +282,8 @@ public class StockService {
         int quantityToDeduct = request.getQuantity();
 
         // Check if unit type is SINGLE (basic unit), otherwise we need to convert
-        // Note: This assumes your medicine stock is tracked in SINGLE units
         if (request.getUnitType() != null && !"single".equalsIgnoreCase(request.getUnitType())) {
             try {
-                // Since we don't have conversion multipliers in your enum,
-                // we'll use a simple conversion based on common assumptions
                 quantityToDeduct = convertToSingleUnits(request.getQuantity(), request.getUnitType());
             } catch (Exception e) {
                 log.warn("Invalid unit type: {}, using quantity as-is", request.getUnitType());
@@ -290,17 +326,17 @@ public class StockService {
     private int convertToSingleUnits(int quantity, String unitType) {
         switch (unitType.toLowerCase()) {
             case "single":
-                return quantity; // 1 single = 1 unit
+                return quantity;
             case "strip":
-                return quantity * 10; // Assuming 1 strip = 10 singles
+                return quantity * 10;
             case "box":
-                return quantity * 100; // Assuming 1 box = 100 singles
+                return quantity * 100;
             case "pair":
-                return quantity * 2; // 1 pair = 2 singles
+                return quantity * 2;
             case "bottle":
-                return quantity; // 1 bottle = 1 unit (could be ml, but treat as 1 unit)
+                return quantity;
             default:
-                return quantity; // Default to quantity as-is
+                return quantity;
         }
     }
 

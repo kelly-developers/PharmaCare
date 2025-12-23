@@ -20,8 +20,47 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
     Page<StockMovement> findByMedicine(Medicine medicine, Pageable pageable);
 
     /**
-     * RECOMMENDED: Use JPQL with proper UUID handling
-     * This avoids PostgreSQL-specific casting issues
+     * FIXED: Use native SQL query for better PostgreSQL compatibility
+     * This resolves the "could not determine data type of parameter" issue
+     */
+    @Query(value = """
+        SELECT sm.* FROM patientcare.stock_movements sm 
+        WHERE (:medicineId IS NULL OR sm.medicine_id = :medicineId)
+        AND (:type IS NULL OR sm.type = :type)
+        AND (:startDate IS NULL OR sm.created_at >= :startDate)
+        AND (:endDate IS NULL OR sm.created_at <= :endDate)
+        ORDER BY sm.created_at DESC
+        LIMIT :limit OFFSET :offset
+    """, nativeQuery = true)
+    List<StockMovement> findStockMovementsWithFiltersNative(
+            @Param("medicineId") UUID medicineId,
+            @Param("type") String type,
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate,
+            @Param("offset") long offset,
+            @Param("limit") int limit
+    );
+
+    /**
+     * FIXED: Count query for pagination
+     */
+    @Query(value = """
+        SELECT COUNT(sm.*) FROM patientcare.stock_movements sm 
+        WHERE (:medicineId IS NULL OR sm.medicine_id = :medicineId)
+        AND (:type IS NULL OR sm.type = :type)
+        AND (:startDate IS NULL OR sm.created_at >= :startDate)
+        AND (:endDate IS NULL OR sm.created_at <= :endDate)
+    """, nativeQuery = true)
+    long countStockMovementsWithFilters(
+            @Param("medicineId") UUID medicineId,
+            @Param("type") String type,
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate
+    );
+
+    /**
+     * RECOMMENDED: Alternative JPQL version with proper type handling
+     * Use this if you prefer JPQL over native queries
      */
     @Query("""
         SELECT sm FROM StockMovement sm 
