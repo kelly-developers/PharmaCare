@@ -1,11 +1,14 @@
 package com.PharmaCare.pos_backend.service;
 
+import com.PharmaCare.pos_backend.dto.request.StockAdditionRequest;
 import com.PharmaCare.pos_backend.dto.request.StockAdjustmentRequest;
+import com.PharmaCare.pos_backend.dto.request.StockDeductionRequest;
 import com.PharmaCare.pos_backend.dto.request.StockLossRequest;
 import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
 import com.PharmaCare.pos_backend.dto.response.StockMovementResponse;
 import com.PharmaCare.pos_backend.enums.Role;
 import com.PharmaCare.pos_backend.enums.StockMovementType;
+import com.PharmaCare.pos_backend.enums.UnitType;
 import com.PharmaCare.pos_backend.model.Medicine;
 import com.PharmaCare.pos_backend.model.StockMovement;
 import com.PharmaCare.pos_backend.model.User;
@@ -186,6 +189,119 @@ public class StockService {
                 medicine.getName(), request.getQuantity(), newStock, request.getReason());
 
         return mapToStockMovementResponse(savedMovement);
+    }
+
+    /**
+     * ADDED: Add stock (used for purchase orders)
+     */
+    @Transactional
+    public StockMovementResponse addStock(UUID medicineId, StockAdditionRequest request) {
+        Medicine medicine = medicineRepository.findById(medicineId)
+                .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", medicineId));
+
+        User performedBy = userRepository.findById(request.getPerformedBy())
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getPerformedBy()));
+
+        int previousStock = medicine.getStockQuantity();
+        int newStock = previousStock + request.getQuantity();
+
+        medicine.setStockQuantity(newStock);
+        medicineRepository.save(medicine);
+
+        StockMovement stockMovement = StockMovement.builder()
+                .medicine(medicine)
+                .medicineName(medicine.getName())
+                .type(StockMovementType.PURCHASE)
+                .quantity(request.getQuantity())
+                .previousStock(previousStock)
+                .newStock(newStock)
+                .referenceId(request.getReferenceId())
+                .performedBy(performedBy)
+                .performedByName(performedBy.getName())
+                .performedByRole(Role.valueOf(request.getPerformedByRole()))
+                .createdAt(LocalDateTime.now())
+                .build();
+
+        StockMovement savedMovement = stockMovementRepository.save(stockMovement);
+        log.info("Stock added for medicine {}: {} units", medicine.getName(), request.getQuantity());
+
+        return mapToStockMovementResponse(savedMovement);
+    }
+
+    /**
+     * ADDED: Deduct stock (used for sales)
+     */
+    @Transactional
+    public StockMovementResponse deductStock(UUID medicineId, StockDeductionRequest request) {
+        Medicine medicine = medicineRepository.findById(medicineId)
+                .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", medicineId));
+
+        User performedBy = userRepository.findById(request.getPerformedBy())
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getPerformedBy()));
+
+        int previousStock = medicine.getStockQuantity();
+        int quantityToDeduct = request.getQuantity();
+
+        // Check if unit type is SINGLE (basic unit), otherwise we need to convert
+        // Note: This assumes your medicine stock is tracked in SINGLE units
+        if (request.getUnitType() != null && !"single".equalsIgnoreCase(request.getUnitType())) {
+            try {
+                // Since we don't have conversion multipliers in your enum,
+                // we'll use a simple conversion based on common assumptions
+                quantityToDeduct = convertToSingleUnits(request.getQuantity(), request.getUnitType());
+            } catch (Exception e) {
+                log.warn("Invalid unit type: {}, using quantity as-is", request.getUnitType());
+            }
+        }
+
+        int newStock = previousStock - quantityToDeduct;
+
+        if (newStock < 0) {
+            newStock = 0;
+        }
+
+        medicine.setStockQuantity(newStock);
+        medicineRepository.save(medicine);
+
+        StockMovement stockMovement = StockMovement.builder()
+                .medicine(medicine)
+                .medicineName(medicine.getName())
+                .type(StockMovementType.SALE)
+                .quantity(-quantityToDeduct)
+                .previousStock(previousStock)
+                .newStock(newStock)
+                .referenceId(request.getReferenceId())
+                .performedBy(performedBy)
+                .performedByName(performedBy.getName())
+                .performedByRole(Role.valueOf(request.getPerformedByRole()))
+                .createdAt(LocalDateTime.now())
+                .build();
+
+        StockMovement savedMovement = stockMovementRepository.save(stockMovement);
+        log.info("Stock deducted for medicine {}: {} units (original quantity: {} {})",
+                medicine.getName(), quantityToDeduct, request.getQuantity(), request.getUnitType());
+
+        return mapToStockMovementResponse(savedMovement);
+    }
+
+    /**
+     * Helper method to convert different unit types to single units
+     */
+    private int convertToSingleUnits(int quantity, String unitType) {
+        switch (unitType.toLowerCase()) {
+            case "single":
+                return quantity; // 1 single = 1 unit
+            case "strip":
+                return quantity * 10; // Assuming 1 strip = 10 singles
+            case "box":
+                return quantity * 100; // Assuming 1 box = 100 singles
+            case "pair":
+                return quantity * 2; // 1 pair = 2 singles
+            case "bottle":
+                return quantity; // 1 bottle = 1 unit (could be ml, but treat as 1 unit)
+            default:
+                return quantity; // Default to quantity as-is
+        }
     }
 
     /**
