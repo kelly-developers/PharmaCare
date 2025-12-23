@@ -55,7 +55,7 @@ public class Medicine {
     private BigDecimal costPrice;
 
     // UPDATE THIS FIELD - Add @Lob annotation
-    @Lob
+    
     @Column(columnDefinition = "TEXT")
     private String imageUrl;
 
