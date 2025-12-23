@@ -13,7 +13,7 @@ import java.util.List;
 import java.util.UUID;
 
 @Entity
-@Table(name = "medicines", schema = "patientcare")  // Added schema
+@Table(name = "medicines", schema = "patientcare")
 @Getter
 @Setter
 @NoArgsConstructor
@@ -54,6 +54,9 @@ public class Medicine {
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal costPrice;
 
+    // UPDATE THIS FIELD - Add @Lob annotation
+    @Lob
+    @Column(columnDefinition = "TEXT")
     private String imageUrl;
 
     @Column(name = "is_active")
@@ -80,17 +83,14 @@ public class Medicine {
         }
     }
 
-    // Getter for compatibility
     public boolean isActive() {
         return active;
     }
 
-    // Setter for compatibility
     public void setIsActive(boolean active) {
         this.active = active;
     }
 
-    // Safe toString() to prevent recursion
     @Override
     public String toString() {
         return "Medicine{" +
