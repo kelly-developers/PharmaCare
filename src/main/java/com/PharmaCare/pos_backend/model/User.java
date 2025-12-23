@@ -42,9 +42,10 @@ public class User implements UserDetails {
 
     private String phone;
 
-    @Column(name = "is_active")
+    // IMPORTANT: Make sure the column name matches your database exactly
+    @Column(name = "is_active", nullable = false)
     @Builder.Default
-    private boolean active = true;
+    private Boolean active = true;
 
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
@@ -81,15 +82,12 @@ public class User implements UserDetails {
 
     @Override
     public boolean isEnabled() {
-        return active;
+        return active != null ? active : true;
     }
 
-
-
-    // Add this method if you need to access it as isActive
-    @Transient  // This tells JPA not to map it to database
-    public boolean isActive() {
-        return active;
+    // Helper method - remove @Transient annotation since we need this in queries
+    public boolean getActive() {
+        return active != null ? active : true;
     }
 
     // Safe toString() to prevent recursion

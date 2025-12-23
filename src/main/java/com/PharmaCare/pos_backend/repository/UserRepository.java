@@ -20,23 +20,21 @@ public interface UserRepository extends JpaRepository<User, UUID> {
 
     Page<User> findAllByRole(Role role, Pageable pageable);
 
-    // FIXED: Use u.active instead of u.isActive if that's what's in your User entity
+    // FIXED: Use COALESCE for null handling and proper PostgreSQL casting
     @Query("SELECT u FROM User u WHERE " +
-            "(:search IS NULL OR LOWER(u.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
+            "(COALESCE(:search, '') = '' OR " +
+            "LOWER(u.name) LIKE LOWER(CONCAT('%', :search, '%')) OR " +
             "LOWER(u.email) LIKE LOWER(CONCAT('%', :search, '%'))) AND " +
             "(:role IS NULL OR u.role = :role) AND " +
-            "u.active = true")  // Changed from u.isActive to u.active
+            "u.active = true")
     Page<User> searchUsers(@Param("search") String search,
                            @Param("role") Role role,
                            Pageable pageable);
 
-    // FIXED: Changed method name to match User entity field
-    List<User> findAllByActiveTrue();  // Changed from findAllByIsActiveTrue
+    List<User> findAllByActiveTrue();
 
-    // FIXED: Changed method name to match User entity field
-    long countByRoleAndActiveTrue(Role role);  // Changed from countByRoleAndIsActiveTrue
+    long countByRoleAndActiveTrue(Role role);
 
-    // FIXED: Use u.active instead of u.isActive
-    @Query("SELECT COUNT(u) FROM User u WHERE u.active = true")  // Changed from u.isActive
+    @Query("SELECT COUNT(u) FROM User u WHERE u.active = true")
     long countActiveUsers();
 }
