@@ -6,7 +6,6 @@ import jakarta.validation.constraints.Size;
 import lombok.Data;
 
 import java.util.List;
-import java.util.UUID;
 
 @Data
 public class PrescriptionRequest {
@@ -28,8 +27,7 @@ public class PrescriptionRequest {
     @Size(min = 1, message = "At least one prescription item is required")
     private List<PrescriptionItemRequest> items;
 
-    @NotNull(message = "Created by user ID is required")
-    private UUID createdBy;
+    // REMOVED: createdBy field - should come from authentication, not request
 
     @Data
     public static class PrescriptionItemRequest {

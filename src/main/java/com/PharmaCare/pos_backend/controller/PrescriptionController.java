@@ -4,7 +4,6 @@ import com.PharmaCare.pos_backend.dto.request.PrescriptionRequest;
 import com.PharmaCare.pos_backend.dto.response.ApiResponse;
 import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
 import com.PharmaCare.pos_backend.dto.response.PrescriptionResponse;
-
 import com.PharmaCare.pos_backend.enums.PrescriptionStatus;
 import com.PharmaCare.pos_backend.service.PrescriptionService;
 import jakarta.validation.Valid;
@@ -12,6 +11,7 @@ import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.UUID;
@@ -47,9 +47,13 @@ public class PrescriptionController {
     @PostMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'PHARMACIST')")
     public ResponseEntity<ApiResponse<PrescriptionResponse>> createPrescription(
-            @Valid @RequestBody PrescriptionRequest request) {
+            @Valid @RequestBody PrescriptionRequest request,
+            Authentication authentication) {
 
-        PrescriptionResponse prescription = prescriptionService.createPrescription(request);
+        // Get current user from authentication instead of request
+        String currentUsername = authentication.getName();
+        PrescriptionResponse prescription = prescriptionService.createPrescription(request, currentUsername);
+
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(prescription, "Prescription created successfully"));
     }
@@ -58,9 +62,13 @@ public class PrescriptionController {
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'PHARMACIST')")
     public ResponseEntity<ApiResponse<PrescriptionResponse>> updatePrescription(
             @PathVariable UUID id,
-            @Valid @RequestBody PrescriptionRequest request) {
+            @Valid @RequestBody PrescriptionRequest request,
+            Authentication authentication) {
 
+        // Get current user from authentication for logging/audit if needed
+        String currentUsername = authentication.getName();
         PrescriptionResponse prescription = prescriptionService.updatePrescription(id, request);
+
         return ResponseEntity.ok(ApiResponse.success(prescription, "Prescription updated successfully"));
     }
 
@@ -76,7 +84,15 @@ public class PrescriptionController {
     public ResponseEntity<ApiResponse<PrescriptionResponse>> updatePrescriptionStatus(
             @PathVariable UUID id,
             @RequestParam PrescriptionStatus status,
-            @RequestParam(required = false) UUID dispensedBy) {
+            @RequestParam(required = false) UUID dispensedBy,
+            Authentication authentication) {
+
+        // Get current user from authentication if dispensedBy is not provided
+        if (dispensedBy == null && status == PrescriptionStatus.DISPENSED) {
+            String currentUsername = authentication.getName();
+            // You might want to fetch the user ID from the username here
+            // For now, we'll use the service method that handles this
+        }
 
         PrescriptionResponse prescription = prescriptionService.updatePrescriptionStatus(id, status, dispensedBy);
         return ResponseEntity.ok(ApiResponse.success(prescription, "Prescription status updated successfully"));

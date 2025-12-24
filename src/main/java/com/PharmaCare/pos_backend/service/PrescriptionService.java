@@ -60,9 +60,10 @@ public class PrescriptionService {
     }
 
     @Transactional
-    public PrescriptionResponse createPrescription(PrescriptionRequest request) {
-        User createdBy = userRepository.findById(request.getCreatedBy())
-                .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getCreatedBy()));
+    public PrescriptionResponse createPrescription(PrescriptionRequest request, String currentUsername) {
+        // Get current user from username (email)
+        User createdBy = userRepository.findByEmail(currentUsername)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "email", currentUsername));
 
         Prescription prescription = Prescription.builder()
                 .patientName(request.getPatientName())
@@ -93,7 +94,7 @@ public class PrescriptionService {
         prescriptionItemRepository.saveAll(prescriptionItems);
         savedPrescription.setItems(prescriptionItems);
 
-        log.info("Prescription created with ID: {}", savedPrescription.getId());
+        log.info("Prescription created with ID: {} by user: {}", savedPrescription.getId(), currentUsername);
         return mapToPrescriptionResponse(savedPrescription);
     }
 
