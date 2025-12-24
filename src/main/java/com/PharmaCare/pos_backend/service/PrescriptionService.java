@@ -210,29 +210,45 @@ public class PrescriptionService {
     }
 
     private PrescriptionResponse mapToPrescriptionResponse(Prescription prescription) {
-        PrescriptionResponse response = modelMapper.map(prescription, PrescriptionResponse.class);
+        // Manual mapping to avoid ModelMapper issues
+        PrescriptionResponse response = PrescriptionResponse.builder()
+                .id(prescription.getId())
+                .patientName(prescription.getPatientName())
+                .patientPhone(prescription.getPatientPhone())
+                .diagnosis(prescription.getDiagnosis())
+                .notes(prescription.getNotes())
+                .status(prescription.getStatus())
+                .dispensedAt(prescription.getDispensedAt())
+                .createdAt(prescription.getCreatedAt())
+                .build();
 
+        // Map createdBy user
         if (prescription.getCreatedBy() != null) {
             response.setCreatedBy(prescription.getCreatedBy().getId());
             response.setCreatedByName(prescription.getCreatedBy().getName());
         }
 
+        // Map dispensedBy user
         if (prescription.getDispensedBy() != null) {
             response.setDispensedBy(prescription.getDispensedBy().getId());
             response.setDispensedByName(prescription.getDispensedBy().getName());
         }
 
         // Map prescription items
-        List<PrescriptionResponse.PrescriptionItemResponse> itemResponses = prescription.getItems().stream()
-                .map(item -> PrescriptionResponse.PrescriptionItemResponse.builder()
-                        .medicine(item.getMedicine())
-                        .dosage(item.getDosage())
-                        .frequency(item.getFrequency())
-                        .duration(item.getDuration())
-                        .instructions(item.getInstructions())
-                        .build())
-                .collect(Collectors.toList());
-        response.setItems(itemResponses);
+        if (prescription.getItems() != null && !prescription.getItems().isEmpty()) {
+            List<PrescriptionResponse.PrescriptionItemResponse> itemResponses = prescription.getItems().stream()
+                    .map(item -> PrescriptionResponse.PrescriptionItemResponse.builder()
+                            .medicine(item.getMedicine())
+                            .dosage(item.getDosage())
+                            .frequency(item.getFrequency())
+                            .duration(item.getDuration())
+                            .instructions(item.getInstructions())
+                            .build())
+                    .collect(Collectors.toList());
+            response.setItems(itemResponses);
+        } else {
+            response.setItems(new ArrayList<>());
+        }
 
         return response;
     }
