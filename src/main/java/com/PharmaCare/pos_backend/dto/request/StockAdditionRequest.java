@@ -20,7 +20,7 @@ public class StockAdditionRequest {
     private int quantity;
 
     @NotNull(message = "Reference ID is required")
-    private UUID referenceId;
+    private String referenceId;;
 
     @NotNull(message = "Performed by user ID is required")
     private UUID performedBy;

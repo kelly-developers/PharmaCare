@@ -24,10 +24,6 @@ public class Sale {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
-    @OneToMany(mappedBy = "sale", cascade = CascadeType.ALL, orphanRemoval = true)
-    @Builder.Default
-    private List<SaleItem> items = new ArrayList<>();
-
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal subtotal;
 
@@ -47,14 +43,21 @@ public class Sale {
     private PaymentMethod paymentMethod;
 
     @ManyToOne(fetch = FetchType.LAZY)
-    @JoinColumn(name = "cashier_id")
+    @JoinColumn(name = "cashier_id", nullable = false)
     private User cashier;
 
-    @Column(name = "cashier_name")
+    @Column(name = "cashier_name", nullable = false)
     private String cashierName;
 
+    @Column(name = "customer_name")
     private String customerName;
+
+    @Column(name = "customer_phone")
     private String customerPhone;
+
+    @OneToMany(mappedBy = "sale", cascade = CascadeType.ALL, orphanRemoval = true)
+    @Builder.Default
+    private List<SaleItem> items = new ArrayList<>();
 
     @CreationTimestamp
     @Column(updatable = false)

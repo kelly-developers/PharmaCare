@@ -35,6 +35,9 @@ public class SaleRequest {
     @NotNull(message = "Cashier ID is required")
     private UUID cashierId;
 
+    @NotBlank(message = "Cashier name is required")
+    private String cashierName;
+
     private String customerName;
     private String customerPhone;
 

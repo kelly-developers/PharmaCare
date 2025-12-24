@@ -20,7 +20,6 @@ import com.PharmaCare.pos_backend.repository.UserRepository;
 import com.PharmaCare.pos_backend.repository.MedicineRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.modelmapper.ModelMapper;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -51,7 +50,6 @@ public class SaleService {
     private final UserRepository userRepository;
     private final MedicineRepository medicineRepository;
     private final StockService stockService;
-    private final ModelMapper modelMapper;
 
     public SaleResponse getSaleById(UUID id) {
         Sale sale = saleRepository.findById(id)
@@ -66,7 +64,6 @@ public class SaleService {
         LocalDateTime startDateTime = startDate != null ? startDate.atStartOfDay() : null;
         LocalDateTime endDateTime = endDate != null ? endDate.atTime(LocalTime.MAX) : null;
 
-        // Use the custom repository method
         Page<Sale> salesPage = saleRepository.findSalesByCriteria(
                 startDateTime, endDateTime, cashierId, paymentMethod, pageable);
 
@@ -80,9 +77,11 @@ public class SaleService {
 
     @Transactional
     public SaleResponse createSale(SaleRequest request) {
+        // Validate cashier exists
         User cashier = userRepository.findById(request.getCashierId())
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getCashierId()));
 
+        // Create sale
         Sale sale = Sale.builder()
                 .subtotal(request.getSubtotal())
                 .discount(request.getDiscount() != null ? request.getDiscount() : BigDecimal.ZERO)
@@ -90,7 +89,7 @@ public class SaleService {
                 .total(request.getTotal())
                 .paymentMethod(request.getPaymentMethod())
                 .cashier(cashier)
-                .cashierName(cashier.getName())
+                .cashierName(request.getCashierName())
                 .customerName(request.getCustomerName())
                 .customerPhone(request.getCustomerPhone())
                 .createdAt(LocalDateTime.now())
@@ -98,11 +97,14 @@ public class SaleService {
 
         Sale savedSale = saleRepository.save(sale);
 
+        // Create sale items and update stock
         List<SaleItem> saleItems = new ArrayList<>();
         for (SaleRequest.SaleItemRequest itemRequest : request.getItems()) {
+            // Validate medicine exists
             Medicine medicine = medicineRepository.findById(itemRequest.getMedicineId())
                     .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", itemRequest.getMedicineId()));
 
+            // Create sale item
             SaleItem saleItem = SaleItem.builder()
                     .sale(savedSale)
                     .medicine(medicine)
@@ -116,10 +118,11 @@ public class SaleService {
 
             saleItems.add(saleItem);
 
+            // Deduct stock
             StockDeductionRequest deductionRequest = new StockDeductionRequest(
                     itemRequest.getQuantity(),
                     itemRequest.getUnitType(),
-                    savedSale.getId(),
+                    savedSale.getId().toString(), // Use String for referenceId
                     request.getCashierId(),
                     cashier.getRole().name()
             );
@@ -133,10 +136,10 @@ public class SaleService {
             }
         }
 
-        savedSale.setItems(saleItems);
         saleItemRepository.saveAll(saleItems);
+        savedSale.setItems(saleItems);
 
-        log.info("Sale created with ID: {}", savedSale.getId());
+        log.info("Sale created with ID: {} by cashier: {}", savedSale.getId(), cashier.getName());
         return mapToSaleResponse(savedSale);
     }
 
@@ -171,12 +174,10 @@ public class SaleService {
             byPaymentMethod.put(method.name(), amount);
         }
 
-// In the getSalesSummary method, change the line that gets daily data:
         List<Object[]> dailyData = saleRepository.getDailySales(startDateTime, endDateTime);
         List<SalesSummary.DailySales> dailyBreakdown = dailyData.stream()
                 .map(data -> {
                     try {
-                        // Use java.sql.Date or LocalDate depending on what's returned
                         LocalDate date;
                         if (data[0] instanceof java.sql.Date) {
                             date = ((java.sql.Date) data[0]).toLocalDate();
@@ -185,7 +186,6 @@ public class SaleService {
                         } else if (data[0] instanceof LocalDateTime) {
                             date = ((LocalDateTime) data[0]).toLocalDate();
                         } else {
-                            // Try to parse as string if needed
                             date = LocalDate.parse(data[0].toString());
                         }
 
@@ -194,7 +194,7 @@ public class SaleService {
                                 .date(date)
                                 .sales(salesAmount)
                                 .profit(salesAmount.multiply(BigDecimal.valueOf(0.3)))
-                                .transactions(0) // You'll need to calculate this separately
+                                .transactions(0)
                                 .build();
                     } catch (Exception e) {
                         log.warn("Error parsing daily sales data: {}", e.getMessage());
@@ -315,27 +315,32 @@ public class SaleService {
     }
 
     private SaleResponse mapToSaleResponse(Sale sale) {
-        SaleResponse response = modelMapper.map(sale, SaleResponse.class);
+        SaleResponse response = SaleResponse.builder()
+                .id(sale.getId())
+                .subtotal(sale.getSubtotal())
+                .discount(sale.getDiscount())
+                .tax(sale.getTax())
+                .total(sale.getTotal())
+                .paymentMethod(sale.getPaymentMethod())
+                .cashierId(sale.getCashier() != null ? sale.getCashier().getId() : null)
+                .cashierName(sale.getCashierName())
+                .customerName(sale.getCustomerName())
+                .customerPhone(sale.getCustomerPhone())
+                .createdAt(sale.getCreatedAt())
+                .build();
 
         List<SaleResponse.SaleItemResponse> itemResponses = sale.getItems().stream()
-                .map(item -> {
-                    SaleResponse.SaleItemResponse itemResponse = new SaleResponse.SaleItemResponse();
-                    itemResponse.setMedicineId(item.getMedicine() != null ? item.getMedicine().getId() : null);
-                    itemResponse.setMedicineName(item.getMedicineName());
-                    itemResponse.setUnitType(item.getUnitType().getValue());
-                    itemResponse.setQuantity(item.getQuantity());
-                    itemResponse.setUnitPrice(item.getUnitPrice());
-                    itemResponse.setTotalPrice(item.getTotalPrice());
-                    itemResponse.setCostPrice(item.getCostPrice());
-                    return itemResponse;
-                })
+                .map(item -> SaleResponse.SaleItemResponse.builder()
+                        .medicineId(item.getMedicine() != null ? item.getMedicine().getId() : null)
+                        .medicineName(item.getMedicineName())
+                        .unitType(item.getUnitType().getValue())
+                        .quantity(item.getQuantity())
+                        .unitPrice(item.getUnitPrice())
+                        .totalPrice(item.getTotalPrice())
+                        .costPrice(item.getCostPrice())
+                        .build())
                 .collect(Collectors.toList());
         response.setItems(itemResponses);
-
-        if (sale.getCashier() != null) {
-            response.setCashierId(sale.getCashier().getId());
-        }
-        response.setCashierName(sale.getCashierName());
 
         return response;
     }

@@ -6,7 +6,6 @@ import com.PharmaCare.pos_backend.dto.response.SalesSummary;
 import com.PharmaCare.pos_backend.dto.response.ApiResponse;
 import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
 import com.PharmaCare.pos_backend.dto.response.SaleResponse;
-
 import com.PharmaCare.pos_backend.enums.PaymentMethod;
 import com.PharmaCare.pos_backend.service.SaleService;
 import jakarta.validation.Valid;
@@ -15,6 +14,7 @@ import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
+import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
@@ -52,7 +52,13 @@ public class SaleController {
 
     @PostMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'CASHIER')")
-    public ResponseEntity<ApiResponse<SaleResponse>> createSale(@Valid @RequestBody SaleRequest request) {
+    public ResponseEntity<ApiResponse<SaleResponse>> createSale(
+            @Valid @RequestBody SaleRequest request,
+            Authentication authentication) {
+
+        // You can optionally validate that the authenticated user matches the cashierId
+        String currentUsername = authentication.getName();
+
         SaleResponse sale = saleService.createSale(request);
         return ResponseEntity.status(HttpStatus.CREATED)
                 .body(ApiResponse.success(sale, "Sale created successfully"));
