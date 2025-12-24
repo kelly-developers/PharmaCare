@@ -20,7 +20,7 @@ public class StockLossRequest {
     private String reason;
 
     @NotNull(message = "Performed by user ID is required")
-    private UUID performedBy;
+    private String performedBy;
 
     @NotNull(message = "Performer role is required")
     private String performedByRole;

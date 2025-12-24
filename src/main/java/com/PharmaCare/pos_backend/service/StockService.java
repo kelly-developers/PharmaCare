@@ -8,6 +8,7 @@ import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
 import com.PharmaCare.pos_backend.dto.response.StockMovementResponse;
 import com.PharmaCare.pos_backend.enums.Role;
 import com.PharmaCare.pos_backend.enums.StockMovementType;
+import com.PharmaCare.pos_backend.enums.UnitType;
 import com.PharmaCare.pos_backend.model.Medicine;
 import com.PharmaCare.pos_backend.model.StockMovement;
 import com.PharmaCare.pos_backend.model.User;
@@ -42,7 +43,6 @@ public class StockService {
 
     /**
      * Main method for getting stock movements with filters
-     * Uses native SQL to avoid PostgreSQL parameter type issues
      */
     public PaginatedResponse<StockMovementResponse> getStockMovementsWithDates(
             int page, int limit, UUID medicineId,
@@ -51,21 +51,14 @@ public class StockService {
             LocalDate endDate) {
 
         try {
-            // Calculate offset and limit for native query
             int offset = (page - 1) * limit;
-
-            // Convert LocalDate to LocalDateTime for proper query
             LocalDateTime startDateTime = startDate != null ? startDate.atStartOfDay() : null;
             LocalDateTime endDateTime = endDate != null ? endDate.atTime(23, 59, 59) : null;
-
-            // Convert StockMovementType to string for native query
             String typeStr = type != null ? type.name() : null;
 
-            // Get total count first
             long totalElements = stockMovementRepository.countStockMovementsWithFilters(
                     medicineId, typeStr, startDateTime, endDateTime);
 
-            // Get paginated data using native query
             List<StockMovement> movements = stockMovementRepository.findStockMovementsWithFiltersNative(
                     medicineId, typeStr, startDateTime, endDateTime, offset, limit);
 
@@ -73,12 +66,10 @@ public class StockService {
                     .map(this::mapToStockMovementResponse)
                     .collect(Collectors.toList());
 
-            // Use your existing PaginatedResponse.of() method
             return PaginatedResponse.of(movementResponses, page, limit, totalElements);
 
         } catch (Exception e) {
             log.error("Error fetching stock movements: {}", e.getMessage(), e);
-            // Fallback to JPQL if native query fails
             try {
                 return getStockMovementsWithFiltersFallback(page, limit, medicineId, type, startDate, endDate);
             } catch (Exception ex) {
@@ -98,12 +89,9 @@ public class StockService {
             LocalDate endDate) {
 
         Pageable pageable = PageRequest.of(page - 1, limit, Sort.by("createdAt").descending());
-
-        // Convert LocalDate to LocalDateTime for proper query
         LocalDateTime startDateTime = startDate != null ? startDate.atStartOfDay() : null;
         LocalDateTime endDateTime = endDate != null ? endDate.atTime(23, 59, 59) : null;
 
-        // Use the JPQL method that handles UUID properly
         Page<StockMovement> movementsPage = stockMovementRepository.findStockMovementsWithFilters(
                 medicineId, type, startDateTime, endDateTime, pageable);
 
@@ -154,8 +142,10 @@ public class StockService {
         Medicine medicine = medicineRepository.findById(request.getMedicineId())
                 .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", request.getMedicineId()));
 
-        User performedBy = userRepository.findById(request.getPerformedBy())
-                .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getPerformedBy()));
+        // Convert String to UUID for performedBy
+        UUID performedById = UUID.fromString(request.getPerformedBy());
+        User performedBy = userRepository.findById(performedById)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", performedById));
 
         int previousStock = medicine.getStockQuantity();
         int newStock = previousStock - request.getQuantity();
@@ -196,8 +186,10 @@ public class StockService {
         Medicine medicine = medicineRepository.findById(request.getMedicineId())
                 .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", request.getMedicineId()));
 
-        User performedBy = userRepository.findById(request.getPerformedBy())
-                .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getPerformedBy()));
+        // Convert String to UUID for performedBy
+        UUID performedById = UUID.fromString(request.getPerformedBy());
+        User performedBy = userRepository.findById(performedById)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", performedById));
 
         int previousStock = medicine.getStockQuantity();
         int newStock = previousStock + request.getQuantity();
@@ -231,15 +223,17 @@ public class StockService {
     }
 
     /**
-     * ADDED: Add stock (used for purchase orders)
+     * Add stock (used for purchase orders)
      */
     @Transactional
     public StockMovementResponse addStock(UUID medicineId, StockAdditionRequest request) {
         Medicine medicine = medicineRepository.findById(medicineId)
                 .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", medicineId));
 
-        User performedBy = userRepository.findById(request.getPerformedBy())
-                .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getPerformedBy()));
+        // Convert String to UUID for performedBy
+        UUID performedById = UUID.fromString(request.getPerformedBy());
+        User performedBy = userRepository.findById(performedById)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", performedById));
 
         int previousStock = medicine.getStockQuantity();
         int newStock = previousStock + request.getQuantity();
@@ -254,7 +248,7 @@ public class StockService {
                 .quantity(request.getQuantity())
                 .previousStock(previousStock)
                 .newStock(newStock)
-                .referenceId(request.getReferenceId())
+                .referenceId(UUID.fromString(request.getReferenceId()))
                 .performedBy(performedBy)
                 .performedByName(performedBy.getName())
                 .performedByRole(Role.valueOf(request.getPerformedByRole()))
@@ -268,20 +262,28 @@ public class StockService {
     }
 
     /**
-     * ADDED: Deduct stock (used for sales)
+     * Deduct stock (used for sales) - FIXED VERSION
      */
     @Transactional
-    public StockMovementResponse deductStock(UUID medicineId, StockDeductionRequest request) {
+    public void deductStock(UUID medicineId, StockDeductionRequest request) {
         Medicine medicine = medicineRepository.findById(medicineId)
                 .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", medicineId));
 
-        User performedBy = userRepository.findById(request.getPerformedBy())
-                .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getPerformedBy()));
+        // Convert String performedById to UUID
+        UUID performedById;
+        try {
+            performedById = UUID.fromString(request.getPerformedById());
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid performedById format: " + request.getPerformedById());
+        }
+
+        User performedBy = userRepository.findById(performedById)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", performedById));
 
         int previousStock = medicine.getStockQuantity();
         int quantityToDeduct = request.getQuantity();
 
-        // Check if unit type is SINGLE (basic unit), otherwise we need to convert
+        // Convert unit types to single units if needed
         if (request.getUnitType() != null && !"single".equalsIgnoreCase(request.getUnitType())) {
             try {
                 quantityToDeduct = convertToSingleUnits(request.getQuantity(), request.getUnitType());
@@ -293,7 +295,8 @@ public class StockService {
         int newStock = previousStock - quantityToDeduct;
 
         if (newStock < 0) {
-            newStock = 0;
+            throw new IllegalArgumentException("Insufficient stock for medicine: " + medicine.getName() +
+                    ". Available: " + previousStock + ", Requested: " + quantityToDeduct);
         }
 
         medicine.setStockQuantity(newStock);
@@ -306,18 +309,16 @@ public class StockService {
                 .quantity(-quantityToDeduct)
                 .previousStock(previousStock)
                 .newStock(newStock)
-                .referenceId(request.getReferenceId())
+                .referenceId(UUID.fromString(request.getReferenceId())) // String
                 .performedBy(performedBy)
                 .performedByName(performedBy.getName())
-                .performedByRole(Role.valueOf(request.getPerformedByRole()))
+                .performedByRole(Role.valueOf(request.getRole()))
                 .createdAt(LocalDateTime.now())
                 .build();
 
-        StockMovement savedMovement = stockMovementRepository.save(stockMovement);
-        log.info("Stock deducted for medicine {}: {} units (original quantity: {} {})",
-                medicine.getName(), quantityToDeduct, request.getQuantity(), request.getUnitType());
-
-        return mapToStockMovementResponse(savedMovement);
+        stockMovementRepository.save(stockMovement);
+        log.info("Stock deducted for medicine {}: {} units",
+                medicine.getName(), quantityToDeduct);
     }
 
     /**
@@ -377,7 +378,6 @@ public class StockService {
 
             Map<String, Object> summary = new HashMap<>();
 
-            // Get counts and quantities for each movement type
             for (StockMovementType type : StockMovementType.values()) {
                 long count = stockMovementRepository.countByTypeAndDateRange(type, startDateTime, endDateTime);
                 int quantity = stockMovementRepository.sumQuantityByTypeAndDateRange(type, startDateTime, endDateTime);
@@ -407,7 +407,6 @@ public class StockService {
             return response;
         } catch (Exception e) {
             log.error("Error mapping stock movement: {}", e.getMessage(), e);
-            // Create basic response if mapping fails
             StockMovementResponse response = new StockMovementResponse();
             response.setId(stockMovement.getId());
             response.setMedicineName(stockMovement.getMedicineName());

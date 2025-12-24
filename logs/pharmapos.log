@@ -1,22 +1,22 @@
-2025-12-23 10:29:20 [restartedMain] INFO  c.P.p.PosBackendApplication - Starting PosBackendApplication using Java 17.0.16 with PID 13144 (C:\Users\KELLY NYACHIRO\Desktop\pos-backend\target\classes started by KELLY NYACHIRO in C:\Users\KELLY NYACHIRO\Desktop\pos-backend)
-2025-12-23 10:29:20 [restartedMain] DEBUG c.P.p.PosBackendApplication - Running with Spring Boot v3.4.12, Spring v6.2.14
-2025-12-23 10:29:20 [restartedMain] INFO  c.P.p.PosBackendApplication - The following 1 profile is active: "dev"
-2025-12-23 10:29:21 [restartedMain] INFO  o.s.b.d.e.DevToolsPropertyDefaultsPostProcessor - Devtools property defaults active! Set 'spring.devtools.add-properties' to 'false' to disable
-2025-12-23 10:29:21 [restartedMain] INFO  o.s.b.d.e.DevToolsPropertyDefaultsPostProcessor - For additional web related logging consider setting the 'logging.level.web' property to 'DEBUG'
-2025-12-23 10:29:29 [restartedMain] INFO  o.s.d.r.c.RepositoryConfigurationDelegate - Bootstrapping Spring Data JPA repositories in DEFAULT mode.
-2025-12-23 10:29:29 [restartedMain] INFO  o.s.d.r.c.RepositoryConfigurationDelegate - Finished Spring Data repository scanning in 311 ms. Found 15 JPA repository interfaces.
-2025-12-23 10:29:32 [restartedMain] INFO  o.s.b.w.e.tomcat.TomcatWebServer - Tomcat initialized with port 8080 (http)
-2025-12-23 10:29:32 [restartedMain] INFO  o.a.catalina.core.StandardService - Starting service [Tomcat]
-2025-12-23 10:29:32 [restartedMain] INFO  o.a.catalina.core.StandardEngine - Starting Servlet engine: [Apache Tomcat/10.1.49]
-2025-12-23 10:29:32 [restartedMain] INFO  o.a.c.c.C.[Tomcat].[localhost].[/] - Initializing Spring embedded WebApplicationContext
-2025-12-23 10:29:32 [restartedMain] INFO  o.s.b.w.s.c.ServletWebServerApplicationContext - Root WebApplicationContext: initialization completed in 11627 ms
-2025-12-23 10:29:33 [restartedMain] ERROR o.s.b.w.e.tomcat.TomcatStarter - Error starting Tomcat context. Exception: org.springframework.beans.factory.UnsatisfiedDependencyException. Message: Error creating bean with name 'jwtAuthenticationFilter' defined in file [C:\Users\KELLY NYACHIRO\Desktop\pos-backend\target\classes\com\PharmaCare\pos_backend\config\JwtAuthenticationFilter.class]: Unsatisfied dependency expressed through constructor parameter 0: Error creating bean with name 'jwtTokenProvider': Unsatisfied dependency expressed through field 'jwtExpiration': Failed to convert value of type 'java.lang.String' to required type 'long'; For input string: "86400000#24hoursinmilliseconds"
-2025-12-23 10:29:33 [restartedMain] INFO  o.a.catalina.core.StandardService - Stopping service [Tomcat]
-2025-12-23 10:29:33 [restartedMain] WARN  o.s.b.w.s.c.AnnotationConfigServletWebServerApplicationContext - Exception encountered during context initialization - cancelling refresh attempt: org.springframework.context.ApplicationContextException: Unable to start web server
-2025-12-23 10:29:34 [restartedMain] INFO  o.s.b.a.l.ConditionEvaluationReportLogger - 
+2025-12-24 15:39:55 [restartedMain] INFO  c.P.p.PosBackendApplication - Starting PosBackendApplication using Java 17.0.16 with PID 6056 (C:\Users\KELLY NYACHIRO\Desktop\pos-backend\target\classes started by KELLY NYACHIRO in C:\Users\KELLY NYACHIRO\Desktop\pos-backend)
+2025-12-24 15:39:55 [restartedMain] DEBUG c.P.p.PosBackendApplication - Running with Spring Boot v3.4.12, Spring v6.2.14
+2025-12-24 15:39:55 [restartedMain] INFO  c.P.p.PosBackendApplication - The following 1 profile is active: "dev"
+2025-12-24 15:39:55 [restartedMain] INFO  o.s.b.d.e.DevToolsPropertyDefaultsPostProcessor - Devtools property defaults active! Set 'spring.devtools.add-properties' to 'false' to disable
+2025-12-24 15:39:55 [restartedMain] INFO  o.s.b.d.e.DevToolsPropertyDefaultsPostProcessor - For additional web related logging consider setting the 'logging.level.web' property to 'DEBUG'
+2025-12-24 15:40:02 [restartedMain] INFO  o.s.d.r.c.RepositoryConfigurationDelegate - Bootstrapping Spring Data JPA repositories in DEFAULT mode.
+2025-12-24 15:40:03 [restartedMain] INFO  o.s.d.r.c.RepositoryConfigurationDelegate - Finished Spring Data repository scanning in 618 ms. Found 15 JPA repository interfaces.
+2025-12-24 15:40:07 [restartedMain] INFO  o.s.b.w.e.tomcat.TomcatWebServer - Tomcat initialized with port 8080 (http)
+2025-12-24 15:40:07 [restartedMain] INFO  o.a.catalina.core.StandardService - Starting service [Tomcat]
+2025-12-24 15:40:07 [restartedMain] INFO  o.a.catalina.core.StandardEngine - Starting Servlet engine: [Apache Tomcat/10.1.49]
+2025-12-24 15:40:08 [restartedMain] INFO  o.a.c.c.C.[Tomcat].[localhost].[/] - Initializing Spring embedded WebApplicationContext
+2025-12-24 15:40:08 [restartedMain] INFO  o.s.b.w.s.c.ServletWebServerApplicationContext - Root WebApplicationContext: initialization completed in 12556 ms
+2025-12-24 15:40:08 [restartedMain] ERROR o.s.b.w.e.tomcat.TomcatStarter - Error starting Tomcat context. Exception: org.springframework.beans.factory.UnsatisfiedDependencyException. Message: Error creating bean with name 'jwtAuthenticationFilter' defined in file [C:\Users\KELLY NYACHIRO\Desktop\pos-backend\target\classes\com\PharmaCare\pos_backend\config\JwtAuthenticationFilter.class]: Unsatisfied dependency expressed through constructor parameter 0: Error creating bean with name 'jwtTokenProvider': Unsatisfied dependency expressed through field 'jwtExpiration': Failed to convert value of type 'java.lang.String' to required type 'long'; For input string: "86400000#24hoursinmilliseconds"
+2025-12-24 15:40:08 [restartedMain] INFO  o.a.catalina.core.StandardService - Stopping service [Tomcat]
+2025-12-24 15:40:09 [restartedMain] WARN  o.s.b.w.s.c.AnnotationConfigServletWebServerApplicationContext - Exception encountered during context initialization - cancelling refresh attempt: org.springframework.context.ApplicationContextException: Unable to start web server
+2025-12-24 15:40:09 [restartedMain] INFO  o.s.b.a.l.ConditionEvaluationReportLogger - 
 
 Error starting ApplicationContext. To display the condition evaluation report re-run your application with 'debug' enabled.
-2025-12-23 10:29:34 [restartedMain] ERROR o.s.boot.SpringApplication - Application run failed
+2025-12-24 15:40:09 [restartedMain] ERROR o.s.boot.SpringApplication - Application run failed
 org.springframework.context.ApplicationContextException: Unable to start web server
 	at org.springframework.boot.web.servlet.context.ServletWebServerApplicationContext.onRefresh(ServletWebServerApplicationContext.java:170)
 	at org.springframework.context.support.AbstractApplicationContext.refresh(AbstractApplicationContext.java:621)

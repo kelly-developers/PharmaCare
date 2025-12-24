@@ -26,6 +26,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDate;
+import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -239,8 +240,10 @@ public class MedicineService {
         Medicine medicine = medicineRepository.findById(medicineId)
                 .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", medicineId));
 
-        User performedBy = userRepository.findById(request.getPerformedBy())
-                .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getPerformedBy()));
+        // Convert String performedById to UUID
+        UUID performedById = UUID.fromString(request.getPerformedById());
+        User performedBy = userRepository.findById(performedById)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", performedById));
 
         // Calculate actual quantity based on unit type
         int actualQuantity = calculateActualQuantity(medicine, request.getUnitType(), request.getQuantity());
@@ -261,7 +264,7 @@ public class MedicineService {
         medicine.setStockQuantity(newStock);
         medicineRepository.save(medicine);
 
-        // Create stock movement record
+        // Create stock movement record - FIXED: referenceId is already String, use directly
         StockMovement stockMovement = StockMovement.builder()
                 .medicine(medicine)
                 .medicineName(medicine.getName())
@@ -269,11 +272,11 @@ public class MedicineService {
                 .quantity(-actualQuantity) // Negative for deduction
                 .previousStock(previousStock)
                 .newStock(newStock)
-                .referenceId(request.getReferenceId())
+                .referenceId(UUID.fromString(request.getReferenceId())) // Already String
                 .performedBy(performedBy)
                 .performedByName(performedBy.getName())
-                .performedByRole(Role.valueOf(request.getPerformedByRole()))
-                .createdAt(java.time.LocalDateTime.now())
+                .performedByRole(Role.valueOf(request.getRole())) // Use getRole() not getPerformedByRole()
+                .createdAt(LocalDateTime.now())
                 .build();
 
         StockMovement savedMovement = stockMovementRepository.save(stockMovement);
@@ -287,8 +290,10 @@ public class MedicineService {
         Medicine medicine = medicineRepository.findById(medicineId)
                 .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", medicineId));
 
-        User performedBy = userRepository.findById(request.getPerformedBy())
-                .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getPerformedBy()));
+        // Convert String performedBy to UUID
+        UUID performedById = UUID.fromString(request.getPerformedBy());
+        User performedBy = userRepository.findById(performedById)
+                .orElseThrow(() -> new ResourceNotFoundException("User", "id", performedById));
 
         int previousStock = medicine.getStockQuantity();
         int newStock = previousStock + request.getQuantity();
@@ -297,7 +302,7 @@ public class MedicineService {
         medicine.setStockQuantity(newStock);
         medicineRepository.save(medicine);
 
-        // Create stock movement record
+        // Create stock movement record - FIXED: referenceId is already String
         StockMovement stockMovement = StockMovement.builder()
                 .medicine(medicine)
                 .medicineName(medicine.getName())
@@ -305,11 +310,11 @@ public class MedicineService {
                 .quantity(request.getQuantity())
                 .previousStock(previousStock)
                 .newStock(newStock)
-                .referenceId(request.getReferenceId())
+                .referenceId(UUID.fromString(request.getReferenceId())) // Already String
                 .performedBy(performedBy)
                 .performedByName(performedBy.getName())
                 .performedByRole(Role.valueOf(request.getPerformedByRole()))
-                .createdAt(java.time.LocalDateTime.now())
+                .createdAt(LocalDateTime.now())
                 .build();
 
         StockMovement savedMovement = stockMovementRepository.save(stockMovement);

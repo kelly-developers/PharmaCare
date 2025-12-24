@@ -7,8 +7,6 @@ import lombok.AllArgsConstructor;
 import lombok.Data;
 import lombok.NoArgsConstructor;
 
-import java.util.UUID;
-
 @Data
 @NoArgsConstructor
 @AllArgsConstructor
@@ -20,12 +18,11 @@ public class StockDeductionRequest {
     @NotBlank(message = "Unit type is required")
     private String unitType;
 
-    @NotNull(message = "Reference ID is required")
-    private UUID referenceId;
+    private String referenceId; // String, not UUID
 
-    @NotNull(message = "Performed by user ID is required")
-    private UUID performedBy;
+    @NotBlank(message = "Performed by is required")
+    private String performedById; // String, not UUID
 
-    @NotBlank(message = "Performer role is required")
-    private String performedByRole;
+    @NotBlank(message = "Role is required")
+    private String role;
 }

@@ -118,13 +118,13 @@ public class SaleService {
 
             saleItems.add(saleItem);
 
-            // Deduct stock
+            // Deduct stock - FIXED: All parameters are now Strings
             StockDeductionRequest deductionRequest = new StockDeductionRequest(
                     itemRequest.getQuantity(),
                     itemRequest.getUnitType(),
-                    savedSale.getId().toString(), // Use String for referenceId
-                    request.getCashierId(),
-                    cashier.getRole().name()
+                    savedSale.getId().toString(), // String referenceId
+                    request.getCashierId().toString(), // String performedById
+                    cashier.getRole().name() // String role
             );
 
             try {

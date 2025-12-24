@@ -342,12 +342,12 @@ public class PurchaseOrderService {
     private void addStockForReceivedItems(PurchaseOrder purchaseOrder, UUID receivedById, User receivedBy) {
         for (PurchaseOrderItem item : purchaseOrder.getItems()) {
             if (item.getMedicine() != null) {
-                // Create StockAdditionRequest using constructor
+                // Create StockAdditionRequest - converting UUIDs to Strings
                 StockAdditionRequest additionRequest = new StockAdditionRequest(
                         item.getMedicine().getId(),
                         item.getQuantity(),
-                        purchaseOrder.getId(),
-                        receivedById,
+                        purchaseOrder.getId().toString(),  // Convert UUID to String
+                        receivedById.toString(),          // Convert UUID to String
                         receivedBy.getRole().name()
                 );
 
