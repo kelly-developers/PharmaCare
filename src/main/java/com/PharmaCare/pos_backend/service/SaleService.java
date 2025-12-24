@@ -14,6 +14,7 @@ import com.PharmaCare.pos_backend.model.SaleItem;
 import com.PharmaCare.pos_backend.model.User;
 import com.PharmaCare.pos_backend.exception.ApiException;
 import com.PharmaCare.pos_backend.exception.ResourceNotFoundException;
+import com.PharmaCare.pos_backend.exception.UnauthorizedException;
 import com.PharmaCare.pos_backend.repository.SaleRepository;
 import com.PharmaCare.pos_backend.repository.SaleItemRepository;
 import com.PharmaCare.pos_backend.repository.UserRepository;
@@ -25,6 +26,8 @@ import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.domain.Sort;
 import org.springframework.http.HttpStatus;
+import org.springframework.security.core.Authentication;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -281,6 +284,23 @@ public class SaleService {
 
         return salesPage.getContent()
                 .stream()
+                .map(this::mapToSaleResponse)
+                .collect(Collectors.toList());
+    }
+
+    // NEW METHOD: Get today's sales for a specific cashier
+    public List<SaleResponse> getCashierTodaySales(UUID cashierId) {
+        LocalDate today = LocalDate.now();
+        LocalDateTime startOfDay = today.atStartOfDay();
+        LocalDateTime endOfDay = today.atTime(LocalTime.MAX);
+
+        List<Sale> todaySales = saleRepository.findByDateAndCashier(startOfDay, endOfDay, cashierId);
+
+        if (todaySales == null) {
+            return new ArrayList<>();
+        }
+
+        return todaySales.stream()
                 .map(this::mapToSaleResponse)
                 .collect(Collectors.toList());
     }

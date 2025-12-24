@@ -7,6 +7,9 @@ import com.PharmaCare.pos_backend.dto.response.ApiResponse;
 import com.PharmaCare.pos_backend.dto.response.PaginatedResponse;
 import com.PharmaCare.pos_backend.dto.response.SaleResponse;
 import com.PharmaCare.pos_backend.enums.PaymentMethod;
+import com.PharmaCare.pos_backend.exception.UnauthorizedException;
+import com.PharmaCare.pos_backend.model.User;
+import com.PharmaCare.pos_backend.repository.UserRepository;
 import com.PharmaCare.pos_backend.service.SaleService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
@@ -19,6 +22,7 @@ import org.springframework.web.bind.annotation.*;
 
 import java.math.BigDecimal;
 import java.time.LocalDate;
+import java.util.List;
 import java.util.UUID;
 
 @RestController
@@ -27,6 +31,7 @@ import java.util.UUID;
 public class SaleController {
 
     private final SaleService saleService;
+    private final UserRepository userRepository;
 
     @GetMapping
     @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER')")
@@ -78,6 +83,29 @@ public class SaleController {
 
         DashboardSummary summary = saleService.getTodaySalesSummary(cashierId);
         return ResponseEntity.ok(ApiResponse.success(summary));
+    }
+
+    @GetMapping("/cashier/{cashierId}/today")
+    @PreAuthorize("hasAnyRole('ADMIN', 'MANAGER', 'CASHIER')")
+    public ResponseEntity<ApiResponse<List<SaleResponse>>> getCashierTodaySales(
+            @PathVariable UUID cashierId,
+            Authentication authentication) {
+
+        // Verify cashier can only access their own data
+        if (authentication.getAuthorities().stream()
+                .anyMatch(auth -> auth.getAuthority().equals("ROLE_CASHIER"))) {
+            String currentUsername = authentication.getName();
+            User currentUser = userRepository.findByEmail(currentUsername)
+                    .orElseThrow(() -> new UnauthorizedException("User not found"));
+
+            // Cashiers can only view their own sales
+            if (!currentUser.getId().equals(cashierId)) {
+                throw new UnauthorizedException("You can only view your own sales");
+            }
+        }
+
+        List<SaleResponse> sales = saleService.getCashierTodaySales(cashierId);
+        return ResponseEntity.ok(ApiResponse.success(sales));
     }
 
     @GetMapping("/report")
