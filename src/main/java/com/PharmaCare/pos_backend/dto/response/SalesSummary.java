@@ -19,6 +19,7 @@ public class SalesSummary {
     private BigDecimal totalCost;
     private BigDecimal grossProfit;
     private double profitMargin;
+    private int itemsSold; // Add this field
     private Map<String, BigDecimal> byPaymentMethod;
     private List<CategorySales> byCategory;
     private List<DailySales> dailyBreakdown;

@@ -42,5 +42,6 @@ public class SaleResponse {
         private BigDecimal unitPrice;
         private BigDecimal totalPrice;
         private BigDecimal costPrice;
+        private BigDecimal profit;
     }
 }

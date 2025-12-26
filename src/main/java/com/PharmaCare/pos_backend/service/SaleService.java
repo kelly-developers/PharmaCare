@@ -107,7 +107,10 @@ public class SaleService {
             Medicine medicine = medicineRepository.findById(itemRequest.getMedicineId())
                     .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", itemRequest.getMedicineId()));
 
-            // Create sale item
+            // Get the actual cost price from medicine
+            BigDecimal costPrice = medicine.getCostPrice() != null ? medicine.getCostPrice() : BigDecimal.ZERO;
+
+            // Create sale item with correct cost price
             SaleItem saleItem = SaleItem.builder()
                     .sale(savedSale)
                     .medicine(medicine)
@@ -116,18 +119,18 @@ public class SaleService {
                     .quantity(itemRequest.getQuantity())
                     .unitPrice(itemRequest.getUnitPrice())
                     .totalPrice(itemRequest.getTotalPrice())
-                    .costPrice(itemRequest.getCostPrice())
+                    .costPrice(costPrice) // Store actual cost price from medicine
                     .build();
 
             saleItems.add(saleItem);
 
-            // Deduct stock - FIXED: All parameters are now Strings
+            // Deduct stock
             StockDeductionRequest deductionRequest = new StockDeductionRequest(
                     itemRequest.getQuantity(),
                     itemRequest.getUnitType(),
-                    savedSale.getId().toString(), // String referenceId
-                    request.getCashierId().toString(), // String performedById
-                    cashier.getRole().name() // String role
+                    savedSale.getId().toString(),
+                    request.getCashierId().toString(),
+                    cashier.getRole().name()
             );
 
             try {
@@ -157,13 +160,20 @@ public class SaleService {
                 .map(Sale::getTotal)
                 .reduce(BigDecimal.ZERO, BigDecimal::add);
 
-        BigDecimal totalCost = sales.stream()
-                .flatMap(sale -> sale.getItems().stream())
-                .map(item -> {
-                    BigDecimal cost = item.getCostPrice() != null ? item.getCostPrice() : BigDecimal.ZERO;
-                    return cost.multiply(BigDecimal.valueOf(item.getQuantity()));
-                })
-                .reduce(BigDecimal.ZERO, BigDecimal::add);
+        // Calculate total cost based ONLY on sold items
+        BigDecimal totalCost = BigDecimal.ZERO;
+        int totalItemsSold = 0;
+
+        for (Sale sale : sales) {
+            for (SaleItem item : sale.getItems()) {
+                // Multiply cost price by quantity sold
+                BigDecimal itemCost = item.getCostPrice() != null ?
+                        item.getCostPrice().multiply(BigDecimal.valueOf(item.getQuantity())) :
+                        BigDecimal.ZERO;
+                totalCost = totalCost.add(itemCost);
+                totalItemsSold += item.getQuantity();
+            }
+        }
 
         BigDecimal grossProfit = totalSales.subtract(totalCost);
         double profitMargin = totalSales.compareTo(BigDecimal.ZERO) > 0 ?
@@ -177,6 +187,7 @@ public class SaleService {
             byPaymentMethod.put(method.name(), amount);
         }
 
+        // Get daily sales with correct profit calculation
         List<Object[]> dailyData = saleRepository.getDailySales(startDateTime, endDateTime);
         List<SalesSummary.DailySales> dailyBreakdown = dailyData.stream()
                 .map(data -> {
@@ -192,12 +203,31 @@ public class SaleService {
                             date = LocalDate.parse(data[0].toString());
                         }
 
-                        BigDecimal salesAmount = (BigDecimal) data[1];
+                        BigDecimal dailySalesAmount = (BigDecimal) data[1];
+
+                        // Get sales for this specific day to calculate actual profit
+                        LocalDateTime dayStart = date.atStartOfDay();
+                        LocalDateTime dayEnd = date.atTime(LocalTime.MAX);
+                        List<Sale> dailySales = saleRepository.findByDate(dayStart, dayEnd);
+
+                        BigDecimal dailyCost = BigDecimal.ZERO;
+                        for (Sale sale : dailySales) {
+                            for (SaleItem item : sale.getItems()) {
+                                BigDecimal itemCost = item.getCostPrice() != null ?
+                                        item.getCostPrice().multiply(BigDecimal.valueOf(item.getQuantity())) :
+                                        BigDecimal.ZERO;
+                                dailyCost = dailyCost.add(itemCost);
+                            }
+                        }
+
+                        BigDecimal dailyProfit = dailySalesAmount.subtract(dailyCost);
+                        int dailyTransactions = dailySales.size();
+
                         return SalesSummary.DailySales.builder()
                                 .date(date)
-                                .sales(salesAmount)
-                                .profit(salesAmount.multiply(BigDecimal.valueOf(0.3)))
-                                .transactions(0)
+                                .sales(dailySalesAmount)
+                                .profit(dailyProfit)
+                                .transactions(dailyTransactions)
                                 .build();
                     } catch (Exception e) {
                         log.warn("Error parsing daily sales data: {}", e.getMessage());
@@ -211,14 +241,19 @@ public class SaleService {
                 })
                 .collect(Collectors.toList());
 
+        // Get top selling items with profit calculation
         List<Object[]> topItems = saleRepository.getTopSellingItems(startDateTime, endDateTime);
         List<SalesSummary.CategorySales> byCategory = new ArrayList<>();
+
+        log.info("Sales Summary: Total Sales = {}, Total Cost = {}, Gross Profit = {}, Items Sold = {}",
+                totalSales, totalCost, grossProfit, totalItemsSold);
 
         return SalesSummary.builder()
                 .totalSales(totalSales)
                 .totalCost(totalCost)
                 .grossProfit(grossProfit)
                 .profitMargin(profitMargin)
+                .itemsSold(totalItemsSold)
                 .byPaymentMethod(byPaymentMethod)
                 .byCategory(byCategory)
                 .dailyBreakdown(dailyBreakdown)
@@ -232,6 +267,7 @@ public class SaleService {
 
         BigDecimal totalAmount;
         long totalTransactions;
+        BigDecimal totalProfit = BigDecimal.ZERO;
 
         if (cashierId != null) {
             totalAmount = saleRepository.getTotalSalesForDateAndCashier(startOfDay, endOfDay, cashierId);
@@ -239,11 +275,17 @@ public class SaleService {
 
             List<Sale> cashierSales = saleRepository.findByDateAndCashier(startOfDay, endOfDay, cashierId);
             totalTransactions = cashierSales != null ? cashierSales.size() : 0;
+
+            // Calculate actual profit for cashier's sales
+            totalProfit = calculateProfitForSales(cashierSales);
         } else {
             totalAmount = saleRepository.getTotalSalesForDate(startOfDay, endOfDay);
             if (totalAmount == null) totalAmount = BigDecimal.ZERO;
 
             totalTransactions = saleRepository.countSalesForDate(startOfDay, endOfDay);
+
+            List<Sale> todaySales = saleRepository.findByDate(startOfDay, endOfDay);
+            totalProfit = calculateProfitForSales(todaySales);
         }
 
         List<Sale> todaySales = cashierId != null ?
@@ -260,8 +302,6 @@ public class SaleService {
             }
         }
 
-        BigDecimal totalProfit = totalAmount.multiply(BigDecimal.valueOf(0.3));
-
         return DashboardSummary.builder()
                 .todaySales(totalAmount)
                 .todayTransactions((int) totalTransactions)
@@ -273,6 +313,27 @@ public class SaleService {
                 .pendingExpenses(0)
                 .pendingPrescriptions(0)
                 .build();
+    }
+
+    private BigDecimal calculateProfitForSales(List<Sale> sales) {
+        if (sales == null || sales.isEmpty()) {
+            return BigDecimal.ZERO;
+        }
+
+        BigDecimal totalRevenue = BigDecimal.ZERO;
+        BigDecimal totalCost = BigDecimal.ZERO;
+
+        for (Sale sale : sales) {
+            totalRevenue = totalRevenue.add(sale.getTotal());
+            for (SaleItem item : sale.getItems()) {
+                BigDecimal itemCost = item.getCostPrice() != null ?
+                        item.getCostPrice().multiply(BigDecimal.valueOf(item.getQuantity())) :
+                        BigDecimal.ZERO;
+                totalCost = totalCost.add(itemCost);
+            }
+        }
+
+        return totalRevenue.subtract(totalCost);
     }
 
     public List<SaleResponse> getSalesByCashier(UUID cashierId) {
@@ -288,7 +349,6 @@ public class SaleService {
                 .collect(Collectors.toList());
     }
 
-    // NEW METHOD: Get today's sales for a specific cashier
     public List<SaleResponse> getCashierTodaySales(UUID cashierId) {
         LocalDate today = LocalDate.now();
         LocalDateTime startOfDay = today.atStartOfDay();
@@ -358,6 +418,9 @@ public class SaleService {
                         .unitPrice(item.getUnitPrice())
                         .totalPrice(item.getTotalPrice())
                         .costPrice(item.getCostPrice())
+                        .profit(item.getTotalPrice().subtract(
+                                item.getCostPrice().multiply(BigDecimal.valueOf(item.getQuantity()))
+                        )) // Calculate profit per item
                         .build())
                 .collect(Collectors.toList());
         response.setItems(itemResponses);
