@@ -1,7 +1,7 @@
 const jwt = require('jsonwebtoken');
-const db = require('../config/database');
+const { query } = require('../config/database');
 
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || process.env.APPLICATION_SECURITY_JWT_SECRET_KEY || 'your-secret-key';
 
 // Verify JWT token
 const authenticate = async (req, res, next) => {
@@ -16,8 +16,8 @@ const authenticate = async (req, res, next) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     
     // Get user from database
-    const [users] = await db.query(
-      'SELECT id, username, email, role, active FROM users WHERE id = ?',
+    const [users] = await query(
+      'SELECT id, username, email, role, active FROM users WHERE id = $1',
       [decoded.userId]
     );
 

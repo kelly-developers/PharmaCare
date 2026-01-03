@@ -1,6 +1,6 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const db = require('../config/database');
+const { query } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
@@ -12,33 +12,33 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, ne
     const size = parseInt(req.query.size) || 20;
     const offset = page * size;
 
-    const [sales] = await db.query(`
+    const [sales] = await query(`
       SELECT s.*, u.name as cashier_name
       FROM sales s
       LEFT JOIN users u ON s.cashier_id = u.id
       ORDER BY s.created_at DESC
-      LIMIT ? OFFSET ?
+      LIMIT $1 OFFSET $2
     `, [size, offset]);
 
     // Get sale items for each sale
     for (let sale of sales) {
-      const [items] = await db.query(`
+      const [items] = await query(`
         SELECT si.*, m.name as medicine_name
         FROM sale_items si
         LEFT JOIN medicines m ON si.medicine_id = m.id
-        WHERE si.sale_id = ?
+        WHERE si.sale_id = $1
       `, [sale.id]);
       sale.items = items;
     }
 
-    const [[{ total }]] = await db.query('SELECT COUNT(*) as total FROM sales');
+    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM sales');
 
     res.json({
       success: true,
       data: {
         content: sales,
-        totalElements: total,
-        totalPages: Math.ceil(total / size),
+        totalElements: parseInt(total),
+        totalPages: Math.ceil(parseInt(total) / size),
         page,
         size
       }
@@ -51,24 +51,22 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, ne
 // GET /api/sales/today - Get today's sales summary
 router.get('/today', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
-
-    const [[summary]] = await db.query(`
+    const [[summary]] = await query(`
       SELECT 
         COUNT(*) as transaction_count,
         COALESCE(SUM(total_amount), 0) as total_sales,
         COALESCE(SUM(profit), 0) as total_profit
       FROM sales
-      WHERE DATE(created_at) = ?
-    `, [today]);
+      WHERE DATE(created_at) = CURRENT_DATE
+    `);
 
     res.json({
       success: true,
       data: {
-        transactionCount: summary.transaction_count,
-        totalSales: summary.total_sales,
-        totalProfit: summary.total_profit,
-        date: today
+        transactionCount: parseInt(summary.transaction_count),
+        totalSales: parseFloat(summary.total_sales),
+        totalProfit: parseFloat(summary.total_profit),
+        date: new Date().toISOString().split('T')[0]
       }
     });
   } catch (error) {
@@ -79,23 +77,21 @@ router.get('/today', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), asy
 // GET /api/sales/cashier/:cashierId/today - Get cashier's today sales
 router.get('/cashier/:cashierId/today', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
   try {
-    const today = new Date().toISOString().split('T')[0];
-
-    const [sales] = await db.query(`
+    const [sales] = await query(`
       SELECT s.*, u.name as cashier_name
       FROM sales s
       LEFT JOIN users u ON s.cashier_id = u.id
-      WHERE s.cashier_id = ? AND DATE(s.created_at) = ?
+      WHERE s.cashier_id = $1 AND DATE(s.created_at) = CURRENT_DATE
       ORDER BY s.created_at DESC
-    `, [req.params.cashierId, today]);
+    `, [req.params.cashierId]);
 
     // Get items for each sale
     for (let sale of sales) {
-      const [items] = await db.query(`
+      const [items] = await query(`
         SELECT si.*, m.name as medicine_name
         FROM sale_items si
         LEFT JOIN medicines m ON si.medicine_id = m.id
-        WHERE si.sale_id = ?
+        WHERE si.sale_id = $1
       `, [sale.id]);
       sale.items = items;
     }
@@ -113,17 +109,17 @@ router.get('/cashier/:cashierId', authenticate, authorize('ADMIN', 'MANAGER'), a
     const size = parseInt(req.query.size) || 20;
     const offset = page * size;
 
-    const [sales] = await db.query(`
+    const [sales] = await query(`
       SELECT s.*, u.name as cashier_name
       FROM sales s
       LEFT JOIN users u ON s.cashier_id = u.id
-      WHERE s.cashier_id = ?
+      WHERE s.cashier_id = $1
       ORDER BY s.created_at DESC
-      LIMIT ? OFFSET ?
+      LIMIT $2 OFFSET $3
     `, [req.params.cashierId, size, offset]);
 
-    const [[{ total }]] = await db.query(
-      'SELECT COUNT(*) as total FROM sales WHERE cashier_id = ?',
+    const [[{ total }]] = await query(
+      'SELECT COUNT(*) as total FROM sales WHERE cashier_id = $1',
       [req.params.cashierId]
     );
 
@@ -131,8 +127,8 @@ router.get('/cashier/:cashierId', authenticate, authorize('ADMIN', 'MANAGER'), a
       success: true,
       data: {
         content: sales,
-        totalElements: total,
-        totalPages: Math.ceil(total / size),
+        totalElements: parseInt(total),
+        totalPages: Math.ceil(parseInt(total) / size),
         page,
         size
       }
@@ -151,11 +147,11 @@ router.get('/report', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
     const params = [];
 
     if (startDate && endDate) {
-      dateFilter = 'WHERE DATE(created_at) BETWEEN ? AND ?';
+      dateFilter = 'WHERE DATE(created_at) BETWEEN $1 AND $2';
       params.push(startDate, endDate);
     }
 
-    const [[summary]] = await db.query(`
+    const [[summary]] = await query(`
       SELECT 
         COUNT(*) as transaction_count,
         COALESCE(SUM(total_amount), 0) as total_sales,
@@ -166,7 +162,7 @@ router.get('/report', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
     `, params);
 
     // Get daily breakdown
-    const [dailyBreakdown] = await db.query(`
+    const dailyQuery = `
       SELECT 
         DATE(created_at) as date,
         COUNT(*) as transaction_count,
@@ -176,12 +172,18 @@ router.get('/report', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
       ${dateFilter}
       GROUP BY DATE(created_at)
       ORDER BY date DESC
-    `, params);
+    `;
+    const [dailyBreakdown] = await query(dailyQuery, params);
 
     res.json({
       success: true,
       data: {
-        summary,
+        summary: {
+          transaction_count: parseInt(summary.transaction_count),
+          total_sales: parseFloat(summary.total_sales),
+          total_profit: parseFloat(summary.total_profit),
+          average_sale: parseFloat(summary.average_sale)
+        },
         dailyBreakdown
       }
     });
@@ -195,15 +197,21 @@ router.get('/period-total', authenticate, authorize('ADMIN', 'MANAGER'), async (
   try {
     const { startDate, endDate } = req.query;
 
-    const [[result]] = await db.query(`
+    const [[result]] = await query(`
       SELECT 
-        COALESCE(SUM(total_amount), 0) as totalSales,
-        COUNT(*) as transactionCount
+        COALESCE(SUM(total_amount), 0) as "totalSales",
+        COUNT(*) as "transactionCount"
       FROM sales
-      WHERE DATE(created_at) BETWEEN ? AND ?
+      WHERE DATE(created_at) BETWEEN $1 AND $2
     `, [startDate, endDate]);
 
-    res.json({ success: true, data: result });
+    res.json({ 
+      success: true, 
+      data: {
+        totalSales: parseFloat(result.totalSales),
+        transactionCount: parseInt(result.transactionCount)
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -212,22 +220,22 @@ router.get('/period-total', authenticate, authorize('ADMIN', 'MANAGER'), async (
 // GET /api/sales/:id - Get sale by ID
 router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
   try {
-    const [sales] = await db.query(`
+    const [sales] = await query(`
       SELECT s.*, u.name as cashier_name
       FROM sales s
       LEFT JOIN users u ON s.cashier_id = u.id
-      WHERE s.id = ?
+      WHERE s.id = $1
     `, [req.params.id]);
 
     if (sales.length === 0) {
       return res.status(404).json({ success: false, error: 'Sale not found' });
     }
 
-    const [items] = await db.query(`
+    const [items] = await query(`
       SELECT si.*, m.name as medicine_name
       FROM sale_items si
       LEFT JOIN medicines m ON si.medicine_id = m.id
-      WHERE si.sale_id = ?
+      WHERE si.sale_id = $1
     `, [req.params.id]);
 
     sales[0].items = items;
@@ -253,8 +261,8 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
 
     // Calculate totals and validate stock
     for (const item of items) {
-      const [medicines] = await db.query(
-        'SELECT id, name, unit_price, cost_price, stock_quantity FROM medicines WHERE id = ?',
+      const [medicines] = await query(
+        'SELECT id, name, unit_price, cost_price, stock_quantity, units FROM medicines WHERE id = $1',
         [item.medicine_id]
       );
 
@@ -264,7 +272,16 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
 
       const medicine = medicines[0];
 
-      if (medicine.stock_quantity < item.quantity) {
+      // Calculate stock needed based on unit type
+      let stockNeeded = item.quantity;
+      if (medicine.units && item.unit_type) {
+        const unitConfig = medicine.units.find(u => u.type === item.unit_type);
+        if (unitConfig && unitConfig.quantity) {
+          stockNeeded = item.quantity * unitConfig.quantity;
+        }
+      }
+
+      if (medicine.stock_quantity < stockNeeded) {
         return res.status(400).json({ 
           success: false, 
           error: `Insufficient stock for ${medicine.name}. Available: ${medicine.stock_quantity}` 
@@ -274,7 +291,8 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
       item.unit_price = item.unit_price || medicine.unit_price;
       item.cost_price = medicine.cost_price;
       item.subtotal = item.unit_price * item.quantity;
-      item.profit = (item.unit_price - item.cost_price) * item.quantity;
+      item.profit = (item.unit_price - (item.cost_price || 0)) * item.quantity;
+      item.stock_deduction = stockNeeded;
 
       totalAmount += item.subtotal;
       totalProfit += item.profit;
@@ -284,32 +302,32 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
     const finalAmount = totalAmount - (discount || 0);
 
     // Create sale record
-    await db.query(`
+    await query(`
       INSERT INTO sales (id, cashier_id, total_amount, discount, final_amount, profit, payment_method, customer_name, customer_phone, notes, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
     `, [saleId, req.user.id, totalAmount, discount || 0, finalAmount, totalProfit, payment_method || 'CASH', customer_name, customer_phone, notes]);
 
     // Create sale items and update stock
     for (const item of items) {
       const itemId = uuidv4();
 
-      await db.query(`
-        INSERT INTO sale_items (id, sale_id, medicine_id, quantity, unit_price, subtotal)
-        VALUES (?, ?, ?, ?, ?, ?)
-      `, [itemId, saleId, item.medicine_id, item.quantity, item.unit_price, item.subtotal]);
+      await query(`
+        INSERT INTO sale_items (id, sale_id, medicine_id, quantity, unit_type, unit_label, unit_price, subtotal)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+      `, [itemId, saleId, item.medicine_id, item.quantity, item.unit_type, item.unit_label, item.unit_price, item.subtotal]);
 
       // Update medicine stock
-      await db.query(
-        'UPDATE medicines SET stock_quantity = stock_quantity - ?, updated_at = NOW() WHERE id = ?',
-        [item.quantity, item.medicine_id]
+      await query(
+        'UPDATE medicines SET stock_quantity = stock_quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        [item.stock_deduction, item.medicine_id]
       );
 
       // Record stock movement
       const movementId = uuidv4();
-      await db.query(`
+      await query(`
         INSERT INTO stock_movements (id, medicine_id, type, quantity, reference_id, created_by, created_at)
-        VALUES (?, ?, 'SALE', ?, ?, ?, NOW())
-      `, [movementId, item.medicine_id, item.quantity, saleId, req.user.id]);
+        VALUES ($1, $2, 'SALE', $3, $4, $5, CURRENT_TIMESTAMP)
+      `, [movementId, item.medicine_id, item.stock_deduction, saleId, req.user.id]);
     }
 
     res.status(201).json({
@@ -334,22 +352,22 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
 router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
     // Get sale items to reverse stock
-    const [items] = await db.query('SELECT * FROM sale_items WHERE sale_id = ?', [req.params.id]);
+    const [items] = await query('SELECT * FROM sale_items WHERE sale_id = $1', [req.params.id]);
 
     // Reverse stock changes
     for (const item of items) {
-      await db.query(
-        'UPDATE medicines SET stock_quantity = stock_quantity + ?, updated_at = NOW() WHERE id = ?',
+      await query(
+        'UPDATE medicines SET stock_quantity = stock_quantity + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         [item.quantity, item.medicine_id]
       );
     }
 
     // Delete sale items and sale
-    await db.query('DELETE FROM sale_items WHERE sale_id = ?', [req.params.id]);
-    await db.query('DELETE FROM sales WHERE id = ?', [req.params.id]);
+    await query('DELETE FROM sale_items WHERE sale_id = $1', [req.params.id]);
+    await query('DELETE FROM sales WHERE id = $1', [req.params.id]);
 
     // Delete related stock movements
-    await db.query('DELETE FROM stock_movements WHERE reference_id = ?', [req.params.id]);
+    await query('DELETE FROM stock_movements WHERE reference_id = $1', [req.params.id]);
 
     res.json({ success: true });
   } catch (error) {

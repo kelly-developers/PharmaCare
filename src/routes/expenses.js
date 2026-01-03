@@ -1,47 +1,14 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const db = require('../config/database');
+const { query } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/expenses - Get all expenses (paginated)
-router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
-  try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
-
-    const [expenses] = await db.query(`
-      SELECT e.*, u.name as created_by_name, a.name as approved_by_name
-      FROM expenses e
-      LEFT JOIN users u ON e.created_by = u.id
-      LEFT JOIN users a ON e.approved_by = a.id
-      ORDER BY e.created_at DESC
-      LIMIT ? OFFSET ?
-    `, [size, offset]);
-
-    const [[{ total }]] = await db.query('SELECT COUNT(*) as total FROM expenses');
-
-    res.json({
-      success: true,
-      data: {
-        content: expenses,
-        totalElements: total,
-        totalPages: Math.ceil(total / size),
-        page,
-        size
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/expenses/pending - Get pending expenses
+// GET /api/expenses/pending - Get pending expenses (must be before /:id)
 router.get('/pending', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [expenses] = await db.query(`
+    const [expenses] = await query(`
       SELECT e.*, u.name as created_by_name
       FROM expenses e
       LEFT JOIN users u ON e.created_by = u.id
@@ -55,6 +22,45 @@ router.get('/pending', authenticate, authorize('ADMIN', 'MANAGER'), async (req, 
   }
 });
 
+// GET /api/expenses/period-total - Get total expenses for period
+router.get('/period-total', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    const [[result]] = await query(`
+      SELECT COALESCE(SUM(amount), 0) as "totalExpenses"
+      FROM expenses
+      WHERE status = 'APPROVED' AND DATE(expense_date) BETWEEN $1 AND $2
+    `, [startDate, endDate]);
+
+    res.json({ success: true, data: { totalExpenses: parseFloat(result.totalExpenses) } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/expenses/stats - Get expense statistics
+router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM expenses');
+    const [[{ pending }]] = await query("SELECT COUNT(*) as pending FROM expenses WHERE status = 'PENDING'");
+    const [[{ approved }]] = await query("SELECT COUNT(*) as approved FROM expenses WHERE status = 'APPROVED'");
+    const [[{ totalamount }]] = await query("SELECT COALESCE(SUM(amount), 0) as totalAmount FROM expenses WHERE status = 'APPROVED'");
+
+    res.json({
+      success: true,
+      data: { 
+        totalExpenses: parseInt(total), 
+        pendingExpenses: parseInt(pending), 
+        approvedExpenses: parseInt(approved), 
+        totalAmount: parseFloat(totalamount)
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // GET /api/expenses/category/:category - Get expenses by category
 router.get('/category/:category', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
@@ -62,17 +68,17 @@ router.get('/category/:category', authenticate, authorize('ADMIN', 'MANAGER'), a
     const size = parseInt(req.query.size) || 20;
     const offset = page * size;
 
-    const [expenses] = await db.query(`
+    const [expenses] = await query(`
       SELECT e.*, u.name as created_by_name
       FROM expenses e
       LEFT JOIN users u ON e.created_by = u.id
-      WHERE e.category = ?
+      WHERE e.category = $1
       ORDER BY e.created_at DESC
-      LIMIT ? OFFSET ?
+      LIMIT $2 OFFSET $3
     `, [req.params.category, size, offset]);
 
-    const [[{ total }]] = await db.query(
-      'SELECT COUNT(*) as total FROM expenses WHERE category = ?',
+    const [[{ total }]] = await query(
+      'SELECT COUNT(*) as total FROM expenses WHERE category = $1',
       [req.params.category]
     );
 
@@ -80,8 +86,8 @@ router.get('/category/:category', authenticate, authorize('ADMIN', 'MANAGER'), a
       success: true,
       data: {
         content: expenses,
-        totalElements: total,
-        totalPages: Math.ceil(total / size),
+        totalElements: parseInt(total),
+        totalPages: Math.ceil(parseInt(total) / size),
         page,
         size
       }
@@ -91,34 +97,33 @@ router.get('/category/:category', authenticate, authorize('ADMIN', 'MANAGER'), a
   }
 });
 
-// GET /api/expenses/period-total - Get total expenses for period
-router.get('/period-total', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+// GET /api/expenses - Get all expenses (paginated)
+router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const { startDate, endDate } = req.query;
+    const page = parseInt(req.query.page) || 0;
+    const size = parseInt(req.query.size) || 20;
+    const offset = page * size;
 
-    const [[result]] = await db.query(`
-      SELECT COALESCE(SUM(amount), 0) as totalExpenses
-      FROM expenses
-      WHERE status = 'APPROVED' AND DATE(expense_date) BETWEEN ? AND ?
-    `, [startDate, endDate]);
+    const [expenses] = await query(`
+      SELECT e.*, u.name as created_by_name, a.name as approved_by_name
+      FROM expenses e
+      LEFT JOIN users u ON e.created_by = u.id
+      LEFT JOIN users a ON e.approved_by = a.id
+      ORDER BY e.created_at DESC
+      LIMIT $1 OFFSET $2
+    `, [size, offset]);
 
-    res.json({ success: true, data: result });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/expenses/stats - Get expense statistics
-router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
-  try {
-    const [[{ total }]] = await db.query('SELECT COUNT(*) as total FROM expenses');
-    const [[{ pending }]] = await db.query('SELECT COUNT(*) as pending FROM expenses WHERE status = ?', ['PENDING']);
-    const [[{ approved }]] = await db.query('SELECT COUNT(*) as approved FROM expenses WHERE status = ?', ['APPROVED']);
-    const [[{ totalAmount }]] = await db.query('SELECT COALESCE(SUM(amount), 0) as totalAmount FROM expenses WHERE status = ?', ['APPROVED']);
+    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM expenses');
 
     res.json({
       success: true,
-      data: { totalExpenses: total, pendingExpenses: pending, approvedExpenses: approved, totalAmount }
+      data: {
+        content: expenses,
+        totalElements: parseInt(total),
+        totalPages: Math.ceil(parseInt(total) / size),
+        page,
+        size
+      }
     });
   } catch (error) {
     next(error);
@@ -128,12 +133,12 @@ router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
 // GET /api/expenses/:id - Get expense by ID
 router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [expenses] = await db.query(`
+    const [expenses] = await query(`
       SELECT e.*, u.name as created_by_name, a.name as approved_by_name
       FROM expenses e
       LEFT JOIN users u ON e.created_by = u.id
       LEFT JOIN users a ON e.approved_by = a.id
-      WHERE e.id = ?
+      WHERE e.id = $1
     `, [req.params.id]);
 
     if (expenses.length === 0) {
@@ -157,9 +162,9 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (
 
     const id = uuidv4();
 
-    await db.query(`
+    await query(`
       INSERT INTO expenses (id, category, description, amount, expense_date, vendor, receipt_number, notes, status, created_by, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING', ?, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'PENDING', $9, CURRENT_TIMESTAMP)
     `, [id, category, description, amount, expense_date || new Date(), vendor, receipt_number, notes, req.user.id]);
 
     res.status(201).json({
@@ -176,13 +181,13 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async
   try {
     const { category, description, amount, expense_date, vendor, receipt_number, notes } = req.body;
 
-    await db.query(`
+    await query(`
       UPDATE expenses SET
-        category = ?, description = ?, amount = ?, expense_date = ?, vendor = ?, receipt_number = ?, notes = ?, updated_at = NOW()
-      WHERE id = ?
+        category = $1, description = $2, amount = $3, expense_date = $4, vendor = $5, receipt_number = $6, notes = $7, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $8
     `, [category, description, amount, expense_date, vendor, receipt_number, notes, req.params.id]);
 
-    const [expenses] = await db.query('SELECT * FROM expenses WHERE id = ?', [req.params.id]);
+    const [expenses] = await query('SELECT * FROM expenses WHERE id = $1', [req.params.id]);
 
     res.json({ success: true, data: expenses[0] });
   } catch (error) {
@@ -193,7 +198,7 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async
 // DELETE /api/expenses/:id - Delete expense
 router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
   try {
-    await db.query('DELETE FROM expenses WHERE id = ?', [req.params.id]);
+    await query('DELETE FROM expenses WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (error) {
     next(error);
@@ -203,12 +208,12 @@ router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), as
 // PATCH /api/expenses/:id/approve - Approve expense
 router.patch('/:id/approve', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    await db.query(
-      'UPDATE expenses SET status = ?, approved_by = ?, approved_at = NOW(), updated_at = NOW() WHERE id = ?',
-      ['APPROVED', req.user.id, req.params.id]
+    await query(
+      "UPDATE expenses SET status = 'APPROVED', approved_by = $1, approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP WHERE id = $2",
+      [req.user.id, req.params.id]
     );
 
-    const [expenses] = await db.query('SELECT * FROM expenses WHERE id = ?', [req.params.id]);
+    const [expenses] = await query('SELECT * FROM expenses WHERE id = $1', [req.params.id]);
 
     res.json({ success: true, data: expenses[0] });
   } catch (error) {
@@ -221,12 +226,12 @@ router.patch('/:id/reject', authenticate, authorize('ADMIN', 'MANAGER'), async (
   try {
     const { reason } = req.body;
 
-    await db.query(
-      'UPDATE expenses SET status = ?, rejection_reason = ?, approved_by = ?, updated_at = NOW() WHERE id = ?',
-      ['REJECTED', reason, req.user.id, req.params.id]
+    await query(
+      "UPDATE expenses SET status = 'REJECTED', rejection_reason = $1, approved_by = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3",
+      [reason, req.user.id, req.params.id]
     );
 
-    const [expenses] = await db.query('SELECT * FROM expenses WHERE id = ?', [req.params.id]);
+    const [expenses] = await query('SELECT * FROM expenses WHERE id = $1', [req.params.id]);
 
     res.json({ success: true, data: expenses[0] });
   } catch (error) {

@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { errorHandler } = require('./middleware/errorHandler');
+const { initializeDatabase } = require('./scripts/initDatabase');
 
 // Import routes
 const authRoutes = require('./routes/auth');
@@ -20,17 +21,47 @@ const reportRoutes = require('./routes/reports');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
-// Middleware
+// Configure CORS
+const allowedOrigins = process.env.ALLOWED_ORIGINS 
+  ? process.env.ALLOWED_ORIGINS.split(',') 
+  : ['http://localhost:5173', 'http://localhost:3000'];
+
 app.use(cors({
-  origin: process.env.CORS_ORIGIN || '*',
-  credentials: true
+  origin: (origin, callback) => {
+    // Allow requests with no origin (mobile apps, curl, etc.)
+    if (!origin) return callback(null, true);
+    
+    if (allowedOrigins.includes(origin) || process.env.NODE_ENV !== 'production') {
+      callback(null, true);
+    } else {
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization']
 }));
-app.use(express.json());
+
+app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true }));
 
 // Health check endpoint
 app.get('/health', (req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+  res.json({ 
+    status: 'ok', 
+    timestamp: new Date().toISOString(),
+    environment: process.env.NODE_ENV || 'development'
+  });
+});
+
+// API health check
+app.get('/api/health', (req, res) => {
+  res.json({ 
+    success: true,
+    status: 'healthy', 
+    timestamp: new Date().toISOString(),
+    version: '1.0.0'
+  });
 });
 
 // API Routes
@@ -55,7 +86,44 @@ app.use((req, res) => {
   res.status(404).json({ success: false, error: 'Endpoint not found' });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 PharmaCare Backend running on port ${PORT}`);
-  console.log(`📍 Health check: http://localhost:${PORT}/health`);
-});
+// Initialize database and start server
+const startServer = async () => {
+  try {
+    // Initialize database (create tables, admin user, etc.)
+    await initializeDatabase();
+    
+    // Start the server
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log('');
+      console.log('╔══════════════════════════════════════════════════════════╗');
+      console.log('║                                                          ║');
+      console.log('║   🏥 PharmaCare Backend Server                           ║');
+      console.log(`║   🚀 Running on port ${PORT}                                ║`);
+      console.log('║   📍 Environment: ' + (process.env.NODE_ENV || 'development').padEnd(29) + '    ║');
+      console.log('║                                                          ║');
+      console.log('╚══════════════════════════════════════════════════════════╝');
+      console.log('');
+      console.log('Endpoints:');
+      console.log(`  Health Check: /health`);
+      console.log(`  API Health:   /api/health`);
+      console.log(`  Auth:         /api/auth/*`);
+      console.log(`  Users:        /api/users/*`);
+      console.log(`  Categories:   /api/categories/*`);
+      console.log(`  Medicines:    /api/medicines/*`);
+      console.log(`  Suppliers:    /api/suppliers/*`);
+      console.log(`  Stock:        /api/stock/*`);
+      console.log(`  Sales:        /api/sales/*`);
+      console.log(`  Expenses:     /api/expenses/*`);
+      console.log(`  Prescriptions:/api/prescriptions/*`);
+      console.log(`  PO:           /api/purchase-orders/*`);
+      console.log(`  Employees:    /api/employees/*`);
+      console.log(`  Reports:      /api/reports/*`);
+      console.log('');
+    });
+  } catch (error) {
+    console.error('❌ Failed to start server:', error);
+    process.exit(1);
+  }
+};
+
+startServer();

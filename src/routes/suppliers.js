@@ -1,43 +1,14 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const db = require('../config/database');
+const { query } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/suppliers - Get all suppliers (paginated)
-router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
-  try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
-
-    const [suppliers] = await db.query(
-      'SELECT * FROM suppliers ORDER BY name LIMIT ? OFFSET ?',
-      [size, offset]
-    );
-
-    const [[{ total }]] = await db.query('SELECT COUNT(*) as total FROM suppliers');
-
-    res.json({
-      success: true,
-      data: {
-        content: suppliers,
-        totalElements: total,
-        totalPages: Math.ceil(total / size),
-        page,
-        size
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/suppliers/active - Get active suppliers
+// GET /api/suppliers/active - Get active suppliers (must be before /:id)
 router.get('/active', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [suppliers] = await db.query(
+    const [suppliers] = await query(
       'SELECT * FROM suppliers WHERE active = true ORDER BY name'
     );
 
@@ -50,22 +21,22 @@ router.get('/active', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
 // GET /api/suppliers/stats - Get supplier statistics
 router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [[{ total }]] = await db.query('SELECT COUNT(*) as total FROM suppliers');
-    const [[{ active }]] = await db.query('SELECT COUNT(*) as active FROM suppliers WHERE active = true');
+    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM suppliers');
+    const [[{ active }]] = await query('SELECT COUNT(*) as active FROM suppliers WHERE active = true');
 
     res.json({
       success: true,
-      data: { totalSuppliers: total, activeSuppliers: active }
+      data: { totalSuppliers: parseInt(total), activeSuppliers: parseInt(active) }
     });
   } catch (error) {
     next(error);
   }
 });
 
-// GET /api/suppliers/:id - Get supplier by ID
-router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+// GET /api/suppliers/name/:name - Get supplier by name
+router.get('/name/:name', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [suppliers] = await db.query('SELECT * FROM suppliers WHERE id = ?', [req.params.id]);
+    const [suppliers] = await query('SELECT * FROM suppliers WHERE name = $1', [req.params.name]);
 
     if (suppliers.length === 0) {
       return res.status(404).json({ success: false, error: 'Supplier not found' });
@@ -77,10 +48,39 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res,
   }
 });
 
-// GET /api/suppliers/name/:name - Get supplier by name
-router.get('/name/:name', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+// GET /api/suppliers - Get all suppliers (paginated)
+router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [suppliers] = await db.query('SELECT * FROM suppliers WHERE name = ?', [req.params.name]);
+    const page = parseInt(req.query.page) || 0;
+    const size = parseInt(req.query.size) || 20;
+    const offset = page * size;
+
+    const [suppliers] = await query(
+      'SELECT * FROM suppliers ORDER BY name LIMIT $1 OFFSET $2',
+      [size, offset]
+    );
+
+    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM suppliers');
+
+    res.json({
+      success: true,
+      data: {
+        content: suppliers,
+        totalElements: parseInt(total),
+        totalPages: Math.ceil(parseInt(total) / size),
+        page,
+        size
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/suppliers/:id - Get supplier by ID
+router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const [suppliers] = await query('SELECT * FROM suppliers WHERE id = $1', [req.params.id]);
 
     if (suppliers.length === 0) {
       return res.status(404).json({ success: false, error: 'Supplier not found' });
@@ -103,9 +103,9 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, n
 
     const id = uuidv4();
 
-    await db.query(`
+    await query(`
       INSERT INTO suppliers (id, name, contact_person, email, phone, address, city, country, notes, active, created_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, true, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, true, CURRENT_TIMESTAMP)
     `, [id, name, contact_person, email, phone, address, city, country, notes]);
 
     res.status(201).json({
@@ -122,13 +122,13 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res,
   try {
     const { name, contact_person, email, phone, address, city, country, notes } = req.body;
 
-    await db.query(`
+    await query(`
       UPDATE suppliers SET
-        name = ?, contact_person = ?, email = ?, phone = ?, address = ?, city = ?, country = ?, notes = ?, updated_at = NOW()
-      WHERE id = ?
+        name = $1, contact_person = $2, email = $3, phone = $4, address = $5, city = $6, country = $7, notes = $8, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $9
     `, [name, contact_person, email, phone, address, city, country, notes, req.params.id]);
 
-    const [suppliers] = await db.query('SELECT * FROM suppliers WHERE id = ?', [req.params.id]);
+    const [suppliers] = await query('SELECT * FROM suppliers WHERE id = $1', [req.params.id]);
 
     res.json({ success: true, data: suppliers[0] });
   } catch (error) {
@@ -139,7 +139,7 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res,
 // DELETE /api/suppliers/:id - Deactivate supplier
 router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    await db.query('UPDATE suppliers SET active = false, updated_at = NOW() WHERE id = ?', [req.params.id]);
+    await query('UPDATE suppliers SET active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (error) {
     next(error);
@@ -149,9 +149,9 @@ router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
 // PATCH /api/suppliers/:id/activate - Activate supplier
 router.patch('/:id/activate', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    await db.query('UPDATE suppliers SET active = true, updated_at = NOW() WHERE id = ?', [req.params.id]);
+    await query('UPDATE suppliers SET active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
 
-    const [suppliers] = await db.query('SELECT * FROM suppliers WHERE id = ?', [req.params.id]);
+    const [suppliers] = await query('SELECT * FROM suppliers WHERE id = $1', [req.params.id]);
 
     res.json({ success: true, data: suppliers[0] });
   } catch (error) {

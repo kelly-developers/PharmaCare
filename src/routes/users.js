@@ -1,46 +1,16 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
-const db = require('../config/database');
+const { query } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/users - Get all users (paginated)
-router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
-  try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
-
-    const [users] = await db.query(
-      `SELECT id, username, email, name, role, active, created_at, last_login 
-       FROM users ORDER BY created_at DESC LIMIT ? OFFSET ?`,
-      [size, offset]
-    );
-
-    const [[{ total }]] = await db.query('SELECT COUNT(*) as total FROM users');
-
-    res.json({
-      success: true,
-      data: {
-        content: users,
-        totalElements: total,
-        totalPages: Math.ceil(total / size),
-        page,
-        size
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/users/profile - Get current user profile
+// GET /api/users/profile - Get current user profile (must be before /:id)
 router.get('/profile', authenticate, async (req, res, next) => {
   try {
-    const [users] = await db.query(
-      'SELECT id, username, email, name, role, active, created_at, last_login FROM users WHERE id = ?',
+    const [users] = await query(
+      'SELECT id, username, email, name, role, active, created_at, last_login FROM users WHERE id = $1',
       [req.user.id]
     );
 
@@ -55,17 +25,106 @@ router.put('/profile', authenticate, async (req, res, next) => {
   try {
     const { name, email } = req.body;
 
-    await db.query(
-      'UPDATE users SET name = ?, email = ?, updated_at = NOW() WHERE id = ?',
+    await query(
+      'UPDATE users SET name = $1, email = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
       [name, email, req.user.id]
     );
 
-    const [users] = await db.query(
-      'SELECT id, username, email, name, role, active FROM users WHERE id = ?',
+    const [users] = await query(
+      'SELECT id, username, email, name, role, active FROM users WHERE id = $1',
       [req.user.id]
     );
 
     res.json({ success: true, data: users[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/users/stats - Get user statistics (must be before /:id)
+router.get('/stats', authenticate, authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM users');
+    const [[{ active }]] = await query('SELECT COUNT(*) as active FROM users WHERE active = true');
+    
+    // Get counts by role
+    const [roleCounts] = await query(`
+      SELECT role, COUNT(*) as count FROM users GROUP BY role
+    `);
+
+    const roleBreakdown = {};
+    roleCounts.forEach(r => {
+      roleBreakdown[r.role] = parseInt(r.count);
+    });
+
+    res.json({
+      success: true,
+      data: { 
+        totalUsers: parseInt(total), 
+        activeUsers: parseInt(active),
+        ...roleBreakdown
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/users/role/:role - Get users by role
+router.get('/role/:role', authenticate, authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 0;
+    const size = parseInt(req.query.size) || 20;
+    const offset = page * size;
+
+    const [users] = await query(
+      `SELECT id, username, email, name, role, active, created_at 
+       FROM users WHERE role = $1 LIMIT $2 OFFSET $3`,
+      [req.params.role, size, offset]
+    );
+
+    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM users WHERE role = $1', [req.params.role]);
+
+    res.json({
+      success: true,
+      data: {
+        content: users,
+        totalElements: parseInt(total),
+        totalPages: Math.ceil(parseInt(total) / size),
+        page,
+        size
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/users - Get all users (paginated)
+router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
+  try {
+    const page = parseInt(req.query.page) || 0;
+    const size = parseInt(req.query.size) || 20;
+    const offset = page * size;
+
+    const [users] = await query(
+      `SELECT id, username, email, name, role, active, created_at, last_login 
+       FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
+      [size, offset]
+    );
+
+    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM users');
+
+    res.json({
+      success: true,
+      data: {
+        content: users,
+        totalElements: parseInt(total),
+        totalPages: Math.ceil(parseInt(total) / size),
+        page,
+        size
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -79,8 +138,8 @@ router.get('/:id', authenticate, async (req, res, next) => {
       return res.status(403).json({ success: false, error: 'Access denied' });
     }
 
-    const [users] = await db.query(
-      'SELECT id, username, email, name, role, active, created_at, last_login FROM users WHERE id = ?',
+    const [users] = await query(
+      'SELECT id, username, email, name, role, active, created_at, last_login FROM users WHERE id = $1',
       [req.params.id]
     );
 
@@ -106,9 +165,9 @@ router.post('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const id = uuidv4();
 
-    await db.query(
+    await query(
       `INSERT INTO users (id, username, email, password, name, role, active, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, true, NOW())`,
+       VALUES ($1, $2, $3, $4, $5, $6, true, CURRENT_TIMESTAMP)`,
       [id, username, email, hashedPassword, name, role]
     );
 
@@ -131,29 +190,33 @@ router.put('/:id', authenticate, async (req, res, next) => {
 
     const { name, email, role, password } = req.body;
 
-    let query = 'UPDATE users SET name = ?, email = ?, updated_at = NOW()';
+    let queryText = 'UPDATE users SET name = $1, email = $2, updated_at = CURRENT_TIMESTAMP';
     let params = [name, email];
+    let paramIndex = 2;
 
     // Only admin can change role
     if (req.user.role === 'ADMIN' && role) {
-      query += ', role = ?';
+      paramIndex++;
+      queryText += `, role = $${paramIndex}`;
       params.push(role);
     }
 
     // Update password if provided
     if (password) {
       const hashedPassword = await bcrypt.hash(password, 10);
-      query += ', password = ?';
+      paramIndex++;
+      queryText += `, password = $${paramIndex}`;
       params.push(hashedPassword);
     }
 
-    query += ' WHERE id = ?';
+    paramIndex++;
+    queryText += ` WHERE id = $${paramIndex}`;
     params.push(req.params.id);
 
-    await db.query(query, params);
+    await query(queryText, params);
 
-    const [users] = await db.query(
-      'SELECT id, username, email, name, role, active FROM users WHERE id = ?',
+    const [users] = await query(
+      'SELECT id, username, email, name, role, active FROM users WHERE id = $1',
       [req.params.id]
     );
 
@@ -166,7 +229,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
 // DELETE /api/users/:id - Deactivate user
 router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
-    await db.query('UPDATE users SET active = false, updated_at = NOW() WHERE id = ?', [req.params.id]);
+    await query('UPDATE users SET active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (error) {
     next(error);
@@ -176,59 +239,14 @@ router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) =
 // PATCH /api/users/:id/activate - Activate user
 router.patch('/:id/activate', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
-    await db.query('UPDATE users SET active = true, updated_at = NOW() WHERE id = ?', [req.params.id]);
+    await query('UPDATE users SET active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
 
-    const [users] = await db.query(
-      'SELECT id, username, email, name, role, active FROM users WHERE id = ?',
+    const [users] = await query(
+      'SELECT id, username, email, name, role, active FROM users WHERE id = $1',
       [req.params.id]
     );
 
     res.json({ success: true, data: users[0] });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/users/role/:role - Get users by role
-router.get('/role/:role', authenticate, authorize('ADMIN'), async (req, res, next) => {
-  try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
-
-    const [users] = await db.query(
-      `SELECT id, username, email, name, role, active, created_at 
-       FROM users WHERE role = ? LIMIT ? OFFSET ?`,
-      [req.params.role, size, offset]
-    );
-
-    const [[{ total }]] = await db.query('SELECT COUNT(*) as total FROM users WHERE role = ?', [req.params.role]);
-
-    res.json({
-      success: true,
-      data: {
-        content: users,
-        totalElements: total,
-        totalPages: Math.ceil(total / size),
-        page,
-        size
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/users/stats - Get user statistics
-router.get('/stats', authenticate, authorize('ADMIN'), async (req, res, next) => {
-  try {
-    const [[{ total }]] = await db.query('SELECT COUNT(*) as total FROM users');
-    const [[{ active }]] = await db.query('SELECT COUNT(*) as active FROM users WHERE active = true');
-
-    res.json({
-      success: true,
-      data: { totalUsers: total, activeUsers: active }
-    });
   } catch (error) {
     next(error);
   }

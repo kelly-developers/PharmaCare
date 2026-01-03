@@ -1,6 +1,6 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
-const db = require('../config/database');
+const { query } = require('../config/database');
 const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
@@ -16,27 +16,30 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
 
     let whereClause = '1=1';
     const params = [];
+    let paramIndex = 0;
 
     if (search) {
-      whereClause += ' AND (m.name LIKE ? OR m.generic_name LIKE ?)';
-      params.push(`%${search}%`, `%${search}%`);
+      paramIndex++;
+      whereClause += ` AND (m.name ILIKE $${paramIndex} OR m.generic_name ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
     }
 
     if (category) {
-      whereClause += ' AND c.name = ?';
+      paramIndex++;
+      whereClause += ` AND c.name = $${paramIndex}`;
       params.push(category);
     }
 
-    const [medicines] = await db.query(`
+    const [medicines] = await query(`
       SELECT m.*, c.name as category_name
       FROM medicines m
       LEFT JOIN categories c ON m.category_id = c.id
       WHERE ${whereClause}
       ORDER BY m.name
-      LIMIT ? OFFSET ?
+      LIMIT $${paramIndex + 1} OFFSET $${paramIndex + 2}
     `, [...params, size, offset]);
 
-    const [[{ total }]] = await db.query(`
+    const [[{ total }]] = await query(`
       SELECT COUNT(*) as total
       FROM medicines m
       LEFT JOIN categories c ON m.category_id = c.id
@@ -47,8 +50,8 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
       success: true,
       data: {
         content: medicines,
-        totalElements: total,
-        totalPages: Math.ceil(total / size),
+        totalElements: parseInt(total),
+        totalPages: Math.ceil(parseInt(total) / size),
         page,
         size
       }
@@ -61,7 +64,7 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
 // GET /api/medicines/categories - Get all category names
 router.get('/categories', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
-    const [categories] = await db.query('SELECT name FROM categories ORDER BY name');
+    const [categories] = await query('SELECT name FROM categories ORDER BY name');
     res.json({ success: true, data: categories.map(c => c.name) });
   } catch (error) {
     next(error);
@@ -71,7 +74,7 @@ router.get('/categories', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIS
 // GET /api/medicines/low-stock - Get low stock medicines
 router.get('/low-stock', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [medicines] = await db.query(`
+    const [medicines] = await query(`
       SELECT m.*, c.name as category_name
       FROM medicines m
       LEFT JOIN categories c ON m.category_id = c.id
@@ -90,11 +93,11 @@ router.get('/expiring', authenticate, authorize('ADMIN', 'MANAGER'), async (req,
   try {
     const days = parseInt(req.query.days) || 90;
 
-    const [medicines] = await db.query(`
+    const [medicines] = await query(`
       SELECT m.*, c.name as category_name
       FROM medicines m
       LEFT JOIN categories c ON m.category_id = c.id
-      WHERE m.expiry_date <= DATE_ADD(CURDATE(), INTERVAL ? DAY)
+      WHERE m.expiry_date <= CURRENT_DATE + INTERVAL '1 day' * $1
       ORDER BY m.expiry_date ASC
     `, [days]);
 
@@ -107,14 +110,19 @@ router.get('/expiring', authenticate, authorize('ADMIN', 'MANAGER'), async (req,
 // GET /api/medicines/stats - Get medicine statistics
 router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [[{ totalMedicines }]] = await db.query('SELECT COUNT(*) as totalMedicines FROM medicines');
-    const [[{ lowStock }]] = await db.query('SELECT COUNT(*) as lowStock FROM medicines WHERE stock_quantity <= reorder_level');
-    const [[{ expiringSoon }]] = await db.query('SELECT COUNT(*) as expiringSoon FROM medicines WHERE expiry_date <= DATE_ADD(CURDATE(), INTERVAL 90 DAY)');
-    const [[{ outOfStock }]] = await db.query('SELECT COUNT(*) as outOfStock FROM medicines WHERE stock_quantity = 0');
+    const [[{ totalmedicines }]] = await query('SELECT COUNT(*) as totalMedicines FROM medicines');
+    const [[{ lowstock }]] = await query('SELECT COUNT(*) as lowStock FROM medicines WHERE stock_quantity <= reorder_level');
+    const [[{ expiringsoon }]] = await query("SELECT COUNT(*) as expiringSoon FROM medicines WHERE expiry_date <= CURRENT_DATE + INTERVAL '90 days'");
+    const [[{ outofstock }]] = await query('SELECT COUNT(*) as outOfStock FROM medicines WHERE stock_quantity = 0');
 
     res.json({
       success: true,
-      data: { totalMedicines, lowStock, expiringSoon, outOfStock }
+      data: { 
+        totalMedicines: parseInt(totalmedicines), 
+        lowStock: parseInt(lowstock), 
+        expiringSoon: parseInt(expiringsoon), 
+        outOfStock: parseInt(outofstock) 
+      }
     });
   } catch (error) {
     next(error);
@@ -124,11 +132,11 @@ router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
 // GET /api/medicines/:id - Get medicine by ID
 router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
-    const [medicines] = await db.query(`
+    const [medicines] = await query(`
       SELECT m.*, c.name as category_name
       FROM medicines m
       LEFT JOIN categories c ON m.category_id = c.id
-      WHERE m.id = ?
+      WHERE m.id = $1
     `, [req.params.id]);
 
     if (medicines.length === 0) {
@@ -147,33 +155,35 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
     const {
       name, generic_name, category_id, description, manufacturer,
       unit_price, cost_price, stock_quantity, reorder_level,
-      expiry_date, batch_number, requires_prescription
+      expiry_date, batch_number, requires_prescription, product_type,
+      units, image_url
     } = req.body;
 
-    if (!name || !category_id) {
-      return res.status(400).json({ success: false, error: 'Name and category are required' });
+    if (!name) {
+      return res.status(400).json({ success: false, error: 'Name is required' });
     }
 
     const id = uuidv4();
 
-    await db.query(`
+    await query(`
       INSERT INTO medicines (
         id, name, generic_name, category_id, description, manufacturer,
         unit_price, cost_price, stock_quantity, reorder_level,
-        expiry_date, batch_number, requires_prescription, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
+        expiry_date, batch_number, requires_prescription, product_type, units, image_url, created_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
     `, [
       id, name, generic_name, category_id, description, manufacturer,
       unit_price || 0, cost_price || 0, stock_quantity || 0, reorder_level || 10,
-      expiry_date, batch_number, requires_prescription || false
+      expiry_date || null, batch_number, requires_prescription || false, product_type,
+      units ? JSON.stringify(units) : null, image_url
     ]);
 
     // Get the created medicine with category
-    const [medicines] = await db.query(`
+    const [medicines] = await query(`
       SELECT m.*, c.name as category_name
       FROM medicines m
       LEFT JOIN categories c ON m.category_id = c.id
-      WHERE m.id = ?
+      WHERE m.id = $1
     `, [id]);
 
     res.status(201).json({ success: true, data: medicines[0] });
@@ -188,26 +198,29 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
     const {
       name, generic_name, category_id, description, manufacturer,
       unit_price, cost_price, stock_quantity, reorder_level,
-      expiry_date, batch_number, requires_prescription
+      expiry_date, batch_number, requires_prescription, product_type,
+      units, image_url
     } = req.body;
 
-    await db.query(`
+    await query(`
       UPDATE medicines SET
-        name = ?, generic_name = ?, category_id = ?, description = ?, manufacturer = ?,
-        unit_price = ?, cost_price = ?, stock_quantity = ?, reorder_level = ?,
-        expiry_date = ?, batch_number = ?, requires_prescription = ?, updated_at = NOW()
-      WHERE id = ?
+        name = $1, generic_name = $2, category_id = $3, description = $4, manufacturer = $5,
+        unit_price = $6, cost_price = $7, stock_quantity = $8, reorder_level = $9,
+        expiry_date = $10, batch_number = $11, requires_prescription = $12, product_type = $13,
+        units = $14, image_url = $15, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $16
     `, [
       name, generic_name, category_id, description, manufacturer,
       unit_price, cost_price, stock_quantity, reorder_level,
-      expiry_date, batch_number, requires_prescription, req.params.id
+      expiry_date || null, batch_number, requires_prescription, product_type,
+      units ? JSON.stringify(units) : null, image_url, req.params.id
     ]);
 
-    const [medicines] = await db.query(`
+    const [medicines] = await query(`
       SELECT m.*, c.name as category_name
       FROM medicines m
       LEFT JOIN categories c ON m.category_id = c.id
-      WHERE m.id = ?
+      WHERE m.id = $1
     `, [req.params.id]);
 
     res.json({ success: true, data: medicines[0] });
@@ -219,7 +232,7 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
 // DELETE /api/medicines/:id - Delete medicine
 router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
-    await db.query('DELETE FROM medicines WHERE id = ?', [req.params.id]);
+    await query('DELETE FROM medicines WHERE id = $1', [req.params.id]);
     res.json({ success: true });
   } catch (error) {
     next(error);
@@ -236,16 +249,16 @@ router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER'), async
     }
 
     // Update medicine stock
-    await db.query(
-      'UPDATE medicines SET stock_quantity = stock_quantity + ?, updated_at = NOW() WHERE id = ?',
+    await query(
+      'UPDATE medicines SET stock_quantity = stock_quantity + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [quantity, req.params.id]
     );
 
     // Record stock movement
     const movementId = uuidv4();
-    await db.query(`
+    await query(`
       INSERT INTO stock_movements (id, medicine_id, type, quantity, batch_number, notes, created_by, created_at)
-      VALUES (?, ?, 'ADDITION', ?, ?, ?, ?, NOW())
+      VALUES ($1, $2, 'ADDITION', $3, $4, $5, $6, CURRENT_TIMESTAMP)
     `, [movementId, req.params.id, quantity, batch_number, notes, req.user.id]);
 
     res.json({
@@ -272,7 +285,7 @@ router.post('/:id/deduct-stock', authenticate, authorize('ADMIN', 'CASHIER'), as
     }
 
     // Check available stock
-    const [medicines] = await db.query('SELECT stock_quantity FROM medicines WHERE id = ?', [req.params.id]);
+    const [medicines] = await query('SELECT stock_quantity FROM medicines WHERE id = $1', [req.params.id]);
     
     if (medicines.length === 0) {
       return res.status(404).json({ success: false, error: 'Medicine not found' });
@@ -283,16 +296,16 @@ router.post('/:id/deduct-stock', authenticate, authorize('ADMIN', 'CASHIER'), as
     }
 
     // Update medicine stock
-    await db.query(
-      'UPDATE medicines SET stock_quantity = stock_quantity - ?, updated_at = NOW() WHERE id = ?',
+    await query(
+      'UPDATE medicines SET stock_quantity = stock_quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [quantity, req.params.id]
     );
 
     // Record stock movement
     const movementId = uuidv4();
-    await db.query(`
+    await query(`
       INSERT INTO stock_movements (id, medicine_id, type, quantity, reference_id, notes, created_by, created_at)
-      VALUES (?, ?, 'SALE', ?, ?, ?, ?, NOW())
+      VALUES ($1, $2, 'SALE', $3, $4, $5, $6, CURRENT_TIMESTAMP)
     `, [movementId, req.params.id, quantity, reference_id, notes, req.user.id]);
 
     res.json({

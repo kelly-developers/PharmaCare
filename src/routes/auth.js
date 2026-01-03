@@ -1,11 +1,12 @@
 const express = require('express');
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const db = require('../config/database');
+const { v4: uuidv4 } = require('uuid');
+const { query } = require('../config/database');
 const { authenticate } = require('../middleware/auth');
 
 const router = express.Router();
-const JWT_SECRET = process.env.JWT_SECRET || 'your-secret-key';
+const JWT_SECRET = process.env.JWT_SECRET || process.env.APPLICATION_SECURITY_JWT_SECRET_KEY || 'your-secret-key';
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 
 // POST /api/auth/login
@@ -17,9 +18,9 @@ router.post('/login', async (req, res, next) => {
       return res.status(400).json({ success: false, error: 'Username and password are required' });
     }
 
-    const [users] = await db.query(
-      'SELECT * FROM users WHERE username = ? OR email = ?',
-      [username, username]
+    const [users] = await query(
+      'SELECT * FROM users WHERE username = $1 OR email = $1',
+      [username]
     );
 
     if (users.length === 0) {
@@ -44,7 +45,7 @@ router.post('/login', async (req, res, next) => {
     );
 
     // Update last login
-    await db.query('UPDATE users SET last_login = NOW() WHERE id = ?', [user.id]);
+    await query('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = $1', [user.id]);
 
     res.json({
       success: true,
@@ -74,8 +75,8 @@ router.post('/register', async (req, res, next) => {
     }
 
     // Check if user exists
-    const [existing] = await db.query(
-      'SELECT id FROM users WHERE username = ? OR email = ?',
+    const [existing] = await query(
+      'SELECT id FROM users WHERE username = $1 OR email = $2',
       [username, email]
     );
 
@@ -84,11 +85,11 @@ router.post('/register', async (req, res, next) => {
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const id = require('uuid').v4();
+    const id = uuidv4();
 
-    await db.query(
+    await query(
       `INSERT INTO users (id, username, email, password, name, role, active, created_at) 
-       VALUES (?, ?, ?, ?, ?, ?, true, NOW())`,
+       VALUES ($1, $2, $3, $4, $5, $6, true, CURRENT_TIMESTAMP)`,
       [id, username, email, hashedPassword, name, role]
     );
 
@@ -121,6 +122,24 @@ router.get('/me', authenticate, async (req, res) => {
 // POST /api/auth/logout
 router.post('/logout', authenticate, (req, res) => {
   res.json({ success: true, message: 'Logged out successfully' });
+});
+
+// POST /api/auth/refresh - Refresh token
+router.post('/refresh', authenticate, async (req, res, next) => {
+  try {
+    const token = jwt.sign(
+      { userId: req.user.id, username: req.user.username, role: req.user.role },
+      JWT_SECRET,
+      { expiresIn: JWT_EXPIRES_IN }
+    );
+
+    res.json({
+      success: true,
+      data: { token }
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 module.exports = router;
