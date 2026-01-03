@@ -17,7 +17,7 @@ import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface SaleRepository extends JpaRepository<Sale, UUID> {
+public interface SaleRepository extends JpaRepository<Sale, UUID>, SaleRepositoryCustom {
     Page<Sale> findByCashier(User cashier, Pageable pageable);
 
     // NEW: Check if transaction already exists
@@ -86,18 +86,5 @@ public interface SaleRepository extends JpaRepository<Sale, UUID> {
             @Param("endDate") LocalDateTime endDate
     );
 
-    // NEW: Advanced search with filters
-    @Query("SELECT s FROM Sale s WHERE " +
-            "(:startDate IS NULL OR s.createdAt >= :startDate) AND " +
-            "(:endDate IS NULL OR s.createdAt <= :endDate) AND " +
-            "(:cashierId IS NULL OR s.cashier.id = :cashierId) AND " +
-            "(:paymentMethod IS NULL OR s.paymentMethod = :paymentMethod) " +
-            "ORDER BY s.createdAt DESC")
-    Page<Sale> findSalesByCriteria(
-            @Param("startDate") LocalDateTime startDate,
-            @Param("endDate") LocalDateTime endDate,
-            @Param("cashierId") UUID cashierId,
-            @Param("paymentMethod") PaymentMethod paymentMethod,
-            Pageable pageable
-    );
+    // REMOVED THE PROBLEMATIC NATIVE QUERY - Using custom implementation instead
 }

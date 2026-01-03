@@ -26,10 +26,14 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
      */
     @Query(value = """
     SELECT sm.* FROM spotmedpharmacare.stock_movements sm 
-    WHERE (:medicineIdStr IS NULL OR sm.medicine_id = CAST(:medicineIdStr AS UUID))
-    AND (:type IS NULL OR sm.type = :type)
-    AND (:startDate IS NULL OR sm.created_at >= :startDate)
-    AND (:endDate IS NULL OR sm.created_at <= :endDate)
+    WHERE 
+        COALESCE(:medicineIdStr, '') = '' OR sm.medicine_id = CAST(:medicineIdStr AS UUID)
+        AND 
+        COALESCE(:type, '') = '' OR sm.type = :type
+        AND 
+        (:startDate IS NULL OR sm.created_at >= :startDate)
+        AND 
+        (:endDate IS NULL OR sm.created_at <= :endDate)
     ORDER BY sm.created_at DESC
 """, nativeQuery = true)
     List<StockMovement> findStockMovementsNative(
@@ -44,10 +48,14 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
      */
     @Query(value = """
     SELECT COUNT(sm.*) FROM spotmedpharmacare.stock_movements sm 
-    WHERE (:medicineIdStr IS NULL OR sm.medicine_id = CAST(:medicineIdStr AS UUID))
-    AND (:type IS NULL OR sm.type = :type)
-    AND (:startDate IS NULL OR sm.created_at >= :startDate)
-    AND (:endDate IS NULL OR sm.created_at <= :endDate)
+    WHERE 
+        COALESCE(:medicineIdStr, '') = '' OR sm.medicine_id = CAST(:medicineIdStr AS UUID)
+        AND 
+        COALESCE(:type, '') = '' OR sm.type = :type
+        AND 
+        (:startDate IS NULL OR sm.created_at >= :startDate)
+        AND 
+        (:endDate IS NULL OR sm.created_at <= :endDate)
 """, nativeQuery = true)
     long countStockMovementsNative(
             @Param("medicineIdStr") String medicineIdStr,
@@ -61,10 +69,14 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
      */
     @Query(value = """
         SELECT * FROM spotmedpharmacare.stock_movements sm 
-        WHERE (:medicineIdStr IS NULL OR sm.medicine_id = CAST(:medicineIdStr AS UUID))
-        AND (:type IS NULL OR sm.type = :type)
-        AND (:startDate IS NULL OR sm.created_at >= :startDate)
-        AND (:endDate IS NULL OR sm.created_at <= :endDate)
+        WHERE 
+            COALESCE(:medicineIdStr, '') = '' OR sm.medicine_id = CAST(:medicineIdStr AS UUID)
+            AND 
+            COALESCE(:type, '') = '' OR sm.type = :type
+            AND 
+            (:startDate IS NULL OR sm.created_at >= :startDate)
+            AND 
+            (:endDate IS NULL OR sm.created_at <= :endDate)
         ORDER BY sm.created_at DESC
         OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
     """, nativeQuery = true)
