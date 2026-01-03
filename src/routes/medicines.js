@@ -253,8 +253,6 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
       product_type,
       units,
       image_url,
-    
-      
     } = req.body;
 
     // Validate required fields - category is REQUIRED
