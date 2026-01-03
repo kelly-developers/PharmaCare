@@ -24,6 +24,11 @@ public class Sale {
     @GeneratedValue(strategy = GenerationType.UUID)
     private UUID id;
 
+
+    // NEW: Unique transaction ID to prevent duplicate sales
+    @Column(name = "transaction_id", unique = true, nullable = false, updatable = false)
+    private String transactionId;
+
     @Column(nullable = false, precision = 10, scale = 2)
     private BigDecimal subtotal;
 

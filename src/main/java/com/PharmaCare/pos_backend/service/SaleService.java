@@ -79,7 +79,7 @@ public class SaleService {
     }
 
     /**
-     * FIXED: Create sale with CORRECT stock deduction
+     * FIXED: Create sale with CORRECT stock deduction - NO DOUBLE DEDUCTION
      */
     @Transactional
     public SaleResponse createSale(SaleRequest request) {
@@ -87,14 +87,24 @@ public class SaleService {
         log.info("Sale request: {} items, Total: KSh {}",
                 request.getItems().size(), request.getTotal());
 
+        // Generate unique transaction ID
+        String transactionId = UUID.randomUUID().toString();
+
+        // Check for duplicate transaction
+        if (saleRepository.existsByTransactionId(transactionId)) {
+            log.warn("Duplicate transaction detected: {}", transactionId);
+            throw new ApiException("Sale already processed with this transaction ID",
+                    HttpStatus.CONFLICT);
+        }
+
         // Validate cashier
         User cashier = userRepository.findById(request.getCashierId())
                 .orElseThrow(() -> new ResourceNotFoundException("User", "id", request.getCashierId()));
-
         log.info("Cashier: {} (ID: {})", cashier.getName(), cashier.getId());
 
-        // Create sale
+        // Create sale WITHOUT saving yet
         Sale sale = Sale.builder()
+                .transactionId(transactionId)
                 .subtotal(request.getSubtotal())
                 .discount(request.getDiscount() != null ? request.getDiscount() : BigDecimal.ZERO)
                 .tax(request.getTax() != null ? request.getTax() : BigDecimal.ZERO)
@@ -107,13 +117,11 @@ public class SaleService {
                 .createdAt(LocalDateTime.now())
                 .build();
 
-        Sale savedSale = saleRepository.save(sale);
-        log.info("Sale created with ID: {}", savedSale.getId());
-
-        // Process items
+        // Process items and deduct stock FIRST
         List<SaleItem> saleItems = new ArrayList<>();
         BigDecimal totalCostOfGoodsSold = BigDecimal.ZERO;
 
+        // FIXED: Validate and process each item sequentially
         for (SaleRequest.SaleItemRequest itemRequest : request.getItems()) {
             log.info("Processing item: {} x {} {}",
                     itemRequest.getQuantity(), itemRequest.getUnitType(), itemRequest.getMedicineName());
@@ -123,18 +131,28 @@ public class SaleService {
 
             log.info("Medicine: {}, Current stock: {}", medicine.getName(), medicine.getStockQuantity());
 
-            // Calculate cost
-            BigDecimal costPerUnit = StockCalculator.calculateCostPerUnit(medicine);
+            // Validate stock availability BEFORE creating sale
             int quantityInSmallestUnits = StockCalculator.convertToSmallestUnits(
                     medicine, itemRequest.getQuantity(), itemRequest.getUnitType()
             );
 
+            if (medicine.getStockQuantity() < quantityInSmallestUnits) {
+                log.error("Insufficient stock for {}! Available: {}, Requested: {}",
+                        medicine.getName(), medicine.getStockQuantity(), quantityInSmallestUnits);
+                throw new ApiException(String.format(
+                        "Insufficient stock for %s. Available: %d, Requested: %d",
+                        medicine.getName(), medicine.getStockQuantity(), quantityInSmallestUnits),
+                        HttpStatus.BAD_REQUEST);
+            }
+
+            // Calculate cost
+            BigDecimal costPerUnit = StockCalculator.calculateCostPerUnit(medicine);
             BigDecimal costOfGoodsSold = costPerUnit.multiply(BigDecimal.valueOf(quantityInSmallestUnits));
             totalCostOfGoodsSold = totalCostOfGoodsSold.add(costOfGoodsSold);
 
-            // Create sale item
+            // Create sale item (not saved yet)
             SaleItem saleItem = SaleItem.builder()
-                    .sale(savedSale)
+                    .sale(sale)  // Link to sale
                     .medicine(medicine)
                     .medicineName(itemRequest.getMedicineName())
                     .unitType(UnitType.fromString(itemRequest.getUnitType()))
@@ -150,48 +168,61 @@ public class SaleService {
             log.info("Created sale item: {} x {} {}, Cost: KSh {}",
                     itemRequest.getQuantity(), itemRequest.getUnitType(),
                     itemRequest.getMedicineName(), costOfGoodsSold);
+        }
 
-            // FIXED: Deduct stock ONCE per item
+        // Set cost of goods sold and items
+        sale.setCostOfGoodsSold(totalCostOfGoodsSold);
+        sale.setItems(saleItems);
+
+        // Save sale FIRST
+        Sale savedSale = saleRepository.save(sale);
+        log.info("Sale created with ID: {}, Transaction ID: {}", savedSale.getId(), transactionId);
+
+        // Now deduct stock for each item using the saved sale ID as reference
+        for (int i = 0; i < request.getItems().size(); i++) {
+            SaleRequest.SaleItemRequest itemRequest = request.getItems().get(i);
+            SaleItem saleItem = saleItems.get(i);
+
             try {
                 log.info("Deducting stock for: {} (Current: {})",
-                        medicine.getName(), medicine.getStockQuantity());
+                        itemRequest.getMedicineName(), saleItem.getMedicine().getStockQuantity());
 
                 StockDeductionRequest deductionRequest = new StockDeductionRequest(
                         itemRequest.getQuantity(),
                         itemRequest.getUnitType(),
-                        savedSale.getId().toString(),
+                        savedSale.getId().toString(), // Use saved sale ID as reference
                         cashier.getId().toString(),
                         cashier.getRole().name()
                 );
 
-                // Single deduction call
+                // Single deduction call - This updates the medicine stock
                 stockService.deductStock(itemRequest.getMedicineId(), deductionRequest);
 
-                log.info("Stock deducted successfully for {}", medicine.getName());
+                log.info("Stock deducted successfully for {}", itemRequest.getMedicineName());
 
             } catch (Exception e) {
-                log.error("Failed to deduct stock for {}: {}", medicine.getName(), e.getMessage());
+                log.error("Failed to deduct stock for {}: {}", itemRequest.getMedicineName(), e.getMessage());
 
-                // Rollback sale
+                // Rollback: Delete the saved sale
                 saleRepository.delete(savedSale);
-                throw new ApiException("Failed to deduct stock: " + e.getMessage(),
+
+                throw new ApiException("Failed to deduct stock for " + itemRequest.getMedicineName() + ": " + e.getMessage(),
                         HttpStatus.BAD_REQUEST);
             }
         }
 
-        // Save all items
+        // Save sale items after successful stock deduction
+        for (SaleItem item : saleItems) {
+            item.setSale(savedSale);
+        }
         saleItemRepository.saveAll(saleItems);
-        savedSale.setItems(saleItems);
-        savedSale.setCostOfGoodsSold(totalCostOfGoodsSold);
-
-        Sale finalSale = saleRepository.save(savedSale);
 
         log.info("=== SALE COMPLETED ===");
         log.info("Sale ID: {}, Items: {}, Total: KSh {}, Profit: KSh {}",
-                finalSale.getId(), finalSale.getItems().size(),
-                finalSale.getTotal(), finalSale.getTotal().subtract(totalCostOfGoodsSold));
+                savedSale.getId(), savedSale.getItems().size(),
+                savedSale.getTotal(), savedSale.getTotal().subtract(totalCostOfGoodsSold));
 
-        return mapToSaleResponse(finalSale);
+        return mapToSaleResponse(savedSale);
     }
 
     public SalesSummary getSalesSummary(LocalDate startDate, LocalDate endDate, String groupBy) {

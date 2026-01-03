@@ -13,11 +13,18 @@ import org.springframework.stereotype.Repository;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 @Repository
-public interface SaleRepository extends JpaRepository<Sale, UUID>, SaleRepositoryCustom {
+public interface SaleRepository extends JpaRepository<Sale, UUID> {
     Page<Sale> findByCashier(User cashier, Pageable pageable);
+
+    // NEW: Check if transaction already exists
+    boolean existsByTransactionId(String transactionId);
+
+    // NEW: Find sale by transaction ID
+    Optional<Sale> findByTransactionId(String transactionId);
 
     @Query("SELECT s FROM Sale s WHERE s.createdAt >= :startOfDay AND s.createdAt <= :endOfDay")
     List<Sale> findByDate(
@@ -77,5 +84,20 @@ public interface SaleRepository extends JpaRepository<Sale, UUID>, SaleRepositor
     List<Object[]> getDailySales(
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate
+    );
+
+    // NEW: Advanced search with filters
+    @Query("SELECT s FROM Sale s WHERE " +
+            "(:startDate IS NULL OR s.createdAt >= :startDate) AND " +
+            "(:endDate IS NULL OR s.createdAt <= :endDate) AND " +
+            "(:cashierId IS NULL OR s.cashier.id = :cashierId) AND " +
+            "(:paymentMethod IS NULL OR s.paymentMethod = :paymentMethod) " +
+            "ORDER BY s.createdAt DESC")
+    Page<Sale> findSalesByCriteria(
+            @Param("startDate") LocalDateTime startDate,
+            @Param("endDate") LocalDateTime endDate,
+            @Param("cashierId") UUID cashierId,
+            @Param("paymentMethod") PaymentMethod paymentMethod,
+            Pageable pageable
     );
 }

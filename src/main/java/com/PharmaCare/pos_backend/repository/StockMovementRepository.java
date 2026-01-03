@@ -55,60 +55,26 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
             @Param("startDate") LocalDateTime startDate,
             @Param("endDate") LocalDateTime endDate
     );
-    /**
-     * Primary  JPQL method for stock movements with filters
-     * FIXED: Using CASE statements for better NULL handling
-     */
-    @Query("""
-    SELECT sm FROM StockMovement sm 
-    WHERE (CASE WHEN :medicineId IS NULL THEN TRUE ELSE sm.medicine.id = :medicineId END)
-    AND (CASE WHEN :type IS NULL THEN TRUE ELSE sm.type = :type END)
-    AND (CASE WHEN :startDate IS NULL THEN TRUE ELSE sm.createdAt >= :startDate END)
-    AND (CASE WHEN :endDate IS NULL THEN TRUE ELSE sm.createdAt <= :endDate END)
-    ORDER BY sm.createdAt DESC
-""")
-    Page<StockMovement> findStockMovementsWithFilters(
-            @Param("medicineId") UUID medicineId,
-            @Param("type") StockMovementType type,
-            @Param("startDate") LocalDateTime startDate,
-            @Param("endDate") LocalDateTime endDate,
-            Pageable pageable
-    );
 
     /**
-     * Get all stock movements without pagination
-     */
-    @Query("""
-        SELECT sm FROM StockMovement sm 
-        WHERE (:medicineId IS NULL OR sm.medicine.id = :medicineId)
-        AND (:type IS NULL OR sm.type = :type)
-        AND (:startDate IS NULL OR sm.createdAt >= :startDate)
-        AND (:endDate IS NULL OR sm.createdAt <= :endDate)
-        ORDER BY sm.createdAt DESC
-    """)
-    List<StockMovement> findAllStockMovementsWithFilters(
-            @Param("medicineId") UUID medicineId,
-            @Param("type") StockMovementType type,
-            @Param("startDate") LocalDateTime startDate,
-            @Param("endDate") LocalDateTime endDate
-    );
-
-    /**
-     * Alternative native query using explicit NULL checks (for PostgreSQL compatibility)
+     * Fixed JPQL query for paginated results
      */
     @Query(value = """
-        SELECT sm.* FROM spotmedpharmacare.stock_movements sm 
+        SELECT * FROM spotmedpharmacare.stock_movements sm 
         WHERE (:medicineIdStr IS NULL OR sm.medicine_id = CAST(:medicineIdStr AS UUID))
         AND (:type IS NULL OR sm.type = :type)
         AND (:startDate IS NULL OR sm.created_at >= :startDate)
         AND (:endDate IS NULL OR sm.created_at <= :endDate)
         ORDER BY sm.created_at DESC
+        OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
     """, nativeQuery = true)
-    List<StockMovement> findStockMovementsWithExplicitNullCheck(
+    List<StockMovement> findStockMovementsWithFiltersNativePaginated(
             @Param("medicineIdStr") String medicineIdStr,
             @Param("type") String type,
             @Param("startDate") LocalDateTime startDate,
-            @Param("endDate") LocalDateTime endDate
+            @Param("endDate") LocalDateTime endDate,
+            @Param("offset") int offset,
+            @Param("limit") int limit
     );
 
     @Query("SELECT sm FROM StockMovement sm WHERE sm.referenceId = :referenceId")
@@ -197,4 +163,19 @@ public interface StockMovementRepository extends JpaRepository<StockMovement, UU
      * Count total stock movements for a medicine
      */
     long countByMedicineId(UUID medicineId);
+
+    /**
+     * Check if transaction already exists to prevent duplicates
+     */
+    boolean existsByReferenceId(UUID referenceId);
+
+    /**
+     * Get stock movements by type
+     */
+    List<StockMovement> findByTypeOrderByCreatedAtDesc(StockMovementType type);
+
+    /**
+     * Get stock movements by medicine and type
+     */
+    List<StockMovement> findByMedicineIdAndTypeOrderByCreatedAtDesc(UUID medicineId, StockMovementType type);
 }

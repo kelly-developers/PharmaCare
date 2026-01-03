@@ -56,6 +56,7 @@ public class StockService {
 
     /**
      * GET /api/stock/movements - Main endpoint for stock movements
+     * FIXED: Uses native queries to avoid JPQL parameter binding issues
      */
     public PaginatedResponse<StockMovementResponse> getStockMovementsWithDates(
             int page, int limit, UUID medicineId,
@@ -64,8 +65,8 @@ public class StockService {
             LocalDate endDate) {
 
         try {
-            Pageable pageable = PageRequest.of(page - 1, limit,
-                    Sort.by(Sort.Direction.DESC, "createdAt"));
+            log.debug("Fetching stock movements with filters: medicineId={}, type={}, startDate={}, endDate={}",
+                    medicineId, type, startDate, endDate);
 
             LocalDateTime startDateTime = null;
             LocalDateTime endDateTime = null;
@@ -78,23 +79,31 @@ public class StockService {
                 endDateTime = endDate.atTime(LocalTime.MAX);
             }
 
-            log.debug("Fetching stock movements with filters: medicineId={}, type={}, startDate={}, endDate={}",
-                    medicineId, type, startDateTime, endDateTime);
+            // Convert parameters to strings for native query
+            String medicineIdStr = medicineId != null ? medicineId.toString() : null;
+            String typeStr = type != null ? type.name() : null;
 
-            Page<StockMovement> movementsPage = stockMovementRepository.findStockMovementsWithFilters(
-                    medicineId, type, startDateTime, endDateTime, pageable);
+            // Calculate offset and limit for pagination
+            int offset = (page - 1) * limit;
 
-            List<StockMovementResponse> movementResponses = movementsPage.getContent()
-                    .stream()
+            // Get total count
+            long totalCount = stockMovementRepository.countStockMovementsNative(
+                    medicineIdStr, typeStr, startDateTime, endDateTime);
+
+            // Get paginated data using native query
+            List<StockMovement> movements = stockMovementRepository.findStockMovementsWithFiltersNativePaginated(
+                    medicineIdStr, typeStr, startDateTime, endDateTime, offset, limit);
+
+            List<StockMovementResponse> movementResponses = movements.stream()
                     .map(this::mapToStockMovementResponse)
                     .collect(Collectors.toList());
 
-            log.debug("Found {} stock movements", movementsPage.getTotalElements());
+            log.debug("Found {} stock movements (total: {})", movements.size(), totalCount);
 
-            return PaginatedResponse.of(movementResponses, page, limit, movementsPage.getTotalElements());
+            return PaginatedResponse.of(movementResponses, page, limit, totalCount);
 
         } catch (Exception e) {
-            log.error("Error fetching stock movements with JPQL: {}", e.getMessage(), e);
+            log.error("Error fetching stock movements: {}", e.getMessage(), e);
             throw new ApiException("Failed to fetch stock movements. Please try again later.",
                     HttpStatus.INTERNAL_SERVER_ERROR);
         }
@@ -118,8 +127,11 @@ public class StockService {
             LocalDateTime endDateTime) {
 
         try {
-            List<StockMovement> movements = stockMovementRepository.findAllStockMovementsWithFilters(
-                    medicineId, type, startDateTime, endDateTime);
+            String medicineIdStr = medicineId != null ? medicineId.toString() : null;
+            String typeStr = type != null ? type.name() : null;
+
+            List<StockMovement> movements = stockMovementRepository.findStockMovementsNative(
+                    medicineIdStr, typeStr, startDateTime, endDateTime);
 
             return movements.stream()
                     .map(this::mapToStockMovementResponse)
@@ -277,6 +289,20 @@ public class StockService {
         log.info("Medicine ID: {}, Quantity: {}, Unit Type: {}",
                 medicineId, request.getQuantity(), request.getUnitType());
 
+        // Check if this deduction has already been processed
+        if (request.getReferenceId() != null && !request.getReferenceId().trim().isEmpty()) {
+            try {
+                UUID referenceId = UUID.fromString(request.getReferenceId());
+                if (stockMovementRepository.existsByReferenceId(referenceId)) {
+                    log.warn("Stock deduction already processed for reference: {}", referenceId);
+                    throw new ApiException("Stock deduction already processed",
+                            HttpStatus.CONFLICT);
+                }
+            } catch (IllegalArgumentException e) {
+                log.debug("Invalid referenceId format: {}", request.getReferenceId());
+            }
+        }
+
         // Get medicine
         Medicine medicine = medicineRepository.findById(medicineId)
                 .orElseThrow(() -> new ResourceNotFoundException("Medicine", "id", medicineId));
@@ -312,13 +338,13 @@ public class StockService {
                     HttpStatus.BAD_REQUEST);
         }
 
-        // FIXED: Update stock correctly
+        // FIXED: Update stock correctly - SINGLE UPDATE
         int previousStock = medicine.getStockQuantity();
         int newStock = previousStock - actualQuantity;
 
         log.info("Stock calculation: {} - {} = {}", previousStock, actualQuantity, newStock);
 
-        // Update medicine stock
+        // Update medicine stock - SINGLE UPDATE
         medicine.setStockQuantity(newStock);
         medicineRepository.save(medicine);
 
@@ -334,7 +360,7 @@ public class StockService {
             }
         }
 
-        // Create stock movement
+        // Create stock movement - SINGLE CREATE
         StockMovement stockMovement = StockMovement.builder()
                 .medicine(medicine)
                 .medicineName(medicine.getName())
@@ -370,19 +396,17 @@ public class StockService {
         log.debug("Calculating quantity for: {} {}, medicine: {}",
                 quantity, unitType, medicine.getName());
 
-        // Single units - 1:1 ratio
-        if (isSingleUnit(unitLower)) {
-            return quantity;
-        }
-
-        // Try to find unit configuration
+        // Check medicine units configuration
         List<MedicineUnit> units = medicine.getUnits();
-        for (MedicineUnit unit : units) {
-            if (unit != null && unit.getType() != null) {
-                String unitValue = unit.getType().getValue().toLowerCase();
-                if (unitValue.equals(unitLower)) {
-                    if (unit.getQuantity() > 0) {
-                        return quantity * unit.getQuantity();
+        if (units != null && !units.isEmpty()) {
+            for (MedicineUnit unit : units) {
+                if (unit != null && unit.getType() != null) {
+                    String unitValue = unit.getType().getValue().toLowerCase();
+                    if (unitValue.equals(unitLower)) {
+                        int unitQuantity = unit.getQuantity();
+                        log.debug("Found unit config: {} {} = {} tablets",
+                                quantity, unitType, quantity * unitQuantity);
+                        return quantity * unitQuantity;
                     }
                 }
             }
@@ -392,7 +416,7 @@ public class StockService {
         try {
             UnitType enumType = UnitType.fromString(unitType);
             Optional<MedicineUnit> foundUnits = medicineUnitRepository.findByMedicineAndType(medicine, enumType);
-            if (!foundUnits.isEmpty()) {
+            if (foundUnits.isPresent()) {
                 MedicineUnit unit = foundUnits.get();
                 if (unit.getQuantity() > 0) {
                     return quantity * unit.getQuantity();
@@ -402,7 +426,7 @@ public class StockService {
             log.debug("Enum conversion failed: {}", unitType);
         }
 
-        // Default conversions
+        // Default conversions based on common pharmacy practices
         return getDefaultConversion(unitLower, quantity);
     }
 
@@ -421,21 +445,31 @@ public class StockService {
         switch (unitType) {
             case "strip":
             case "strips":
-                return quantity * 10;
+                return quantity * 10;  // 10 tablets per strip
             case "box":
             case "boxes":
-                return quantity * 100;
+                return quantity * 100; // 100 tablets per box
             case "pack":
             case "packs":
-                return quantity * 30;
+                return quantity * 30;  // 30 tablets per pack
             case "bottle":
             case "bottles":
-                return quantity;
+                return quantity * 100; // 100ml/tablets per bottle
             case "vial":
             case "vials":
-                return quantity;
+                return quantity;       // Single vial
+            case "ampoule":
+            case "ampoules":
+                return quantity;       // Single ampoule
+            case "sachet":
+            case "sachets":
+                return quantity;       // Single sachet
+            case "tube":
+            case "tubes":
+                return quantity * 50;  // 50g/ml per tube
             default:
-                log.warn("Unknown unit type: {}, treating as single", unitType);
+                // Assume single units
+                log.debug("Treating '{}' as single units", unitType);
                 return quantity;
         }
     }
