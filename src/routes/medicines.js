@@ -172,7 +172,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
       units,
       image_url,
   
-      packaging_options
+      
     } = req.body;
 
     // Validate required fields - category is REQUIRED
@@ -190,7 +190,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
         id, name, generic_name, category, description, manufacturer,
         unit_price, cost_price, stock_quantity, reorder_level,
         expiry_date, batch_number, requires_prescription, product_type, 
-        units, image_url, packaging_options, created_at, updated_at
+        units, image_url, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, [
       id, 
@@ -209,7 +209,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
       product_type || null,
       units ? JSON.stringify(units) : null, 
       image_url || null,
-      packaging_options ? JSON.stringify(packaging_options) : null
+      
     ]);
 
     // Get the created medicine
@@ -254,7 +254,7 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
       units,
       image_url,
     
-      packaging_options
+      
     } = req.body;
 
     // Validate required fields - category is REQUIRED
@@ -282,7 +282,7 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
         product_type = $13,
         units = $14, 
         image_url = $15, 
-        packaging_options = $17,
+        
         updated_at = CURRENT_TIMESTAMP
       WHERE id = $18
     `, [
@@ -302,7 +302,7 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
       units ? JSON.stringify(units) : null, 
       image_url || null,
   
-      packaging_options ? JSON.stringify(packaging_options) : null,
+
       req.params.id
     ]);
 
