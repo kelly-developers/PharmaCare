@@ -9,12 +9,23 @@ const authenticate = async (req, res, next) => {
     const authHeader = req.headers.authorization;
     
     if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return res.status(401).json({ success: false, error: 'No token provided' });
+      return res.status(401).json({ 
+        success: false, 
+        error: 'No token provided' 
+      });
     }
 
     const token = authHeader.split(' ')[1];
     const decoded = jwt.verify(token, JWT_SECRET);
     
+    // Check if token is access token (not refresh or reset token)
+    if (decoded.type && decoded.type !== 'access') {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Invalid token type' 
+      });
+    }
+
     // Get user from database
     const [users] = await query(
       'SELECT id, username, email, role, active FROM users WHERE id = $1',
@@ -22,20 +33,40 @@ const authenticate = async (req, res, next) => {
     );
 
     if (users.length === 0) {
-      return res.status(401).json({ success: false, error: 'User not found' });
+      return res.status(401).json({ 
+        success: false, 
+        error: 'User not found' 
+      });
     }
 
-    if (!users[0].active) {
-      return res.status(401).json({ success: false, error: 'User account is deactivated' });
+    const user = users[0];
+
+    if (!user.active) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'User account is deactivated' 
+      });
     }
 
-    req.user = users[0];
+    req.user = user;
     next();
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
-      return res.status(401).json({ success: false, error: 'Token expired' });
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Token expired' 
+      });
     }
-    return res.status(401).json({ success: false, error: 'Invalid token' });
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Invalid token' 
+      });
+    }
+    return res.status(401).json({ 
+      success: false, 
+      error: 'Authentication failed' 
+    });
   }
 };
 
@@ -43,7 +74,10 @@ const authenticate = async (req, res, next) => {
 const authorize = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {
-      return res.status(401).json({ success: false, error: 'Not authenticated' });
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Not authenticated' 
+      });
     }
 
     if (!roles.includes(req.user.role)) {
@@ -57,4 +91,48 @@ const authorize = (...roles) => {
   };
 };
 
-module.exports = { authenticate, authorize };
+// Admin-only middleware
+const isAdmin = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ 
+      success: false, 
+      error: 'Not authenticated' 
+    });
+  }
+
+  if (req.user.role !== 'ADMIN') {
+    return res.status(403).json({ 
+      success: false, 
+      error: 'Admin access required' 
+    });
+  }
+
+  next();
+};
+
+// Staff middleware (Admin, Manager, Pharmacist)
+const isStaff = (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ 
+      success: false, 
+      error: 'Not authenticated' 
+    });
+  }
+
+  const staffRoles = ['ADMIN', 'MANAGER', 'PHARMACIST'];
+  if (!staffRoles.includes(req.user.role)) {
+    return res.status(403).json({ 
+      success: false, 
+      error: 'Staff access required' 
+    });
+  }
+
+  next();
+};
+
+module.exports = { 
+  authenticate, 
+  authorize, 
+  isAdmin, 
+  isStaff 
+};
