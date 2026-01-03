@@ -171,7 +171,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
       product_type,
       units,
       image_url,
-      barcode,
+  
       packaging_options
     } = req.body;
 
@@ -190,7 +190,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
         id, name, generic_name, category, description, manufacturer,
         unit_price, cost_price, stock_quantity, reorder_level,
         expiry_date, batch_number, requires_prescription, product_type, 
-        units, image_url, barcode, packaging_options, created_at, updated_at
+        units, image_url, packaging_options, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, [
       id, 
@@ -209,7 +209,6 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
       product_type || null,
       units ? JSON.stringify(units) : null, 
       image_url || null,
-      barcode || null,
       packaging_options ? JSON.stringify(packaging_options) : null
     ]);
 
@@ -254,7 +253,7 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
       product_type,
       units,
       image_url,
-      barcode,
+    
       packaging_options
     } = req.body;
 
@@ -283,7 +282,6 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
         product_type = $13,
         units = $14, 
         image_url = $15, 
-        barcode = $16, 
         packaging_options = $17,
         updated_at = CURRENT_TIMESTAMP
       WHERE id = $18
@@ -303,7 +301,7 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
       product_type || null,
       units ? JSON.stringify(units) : null, 
       image_url || null,
-      barcode || null,
+  
       packaging_options ? JSON.stringify(packaging_options) : null,
       req.params.id
     ]);
