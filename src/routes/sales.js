@@ -544,7 +544,7 @@ router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) =
       ]);
     }
 
-    // Delete sale itemsand sale
+    // Delete sale items and sale
     await client.query('DELETE FROM sale_items WHERE sale_id = $1', [req.params.id]);
     await client.query('DELETE FROM sales WHERE id = $1', [req.params.id]);
 
