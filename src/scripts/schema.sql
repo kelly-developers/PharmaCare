@@ -1,8 +1,9 @@
--- PharmaCare Database Schema
--- Run this script to create all necessary tables
+-- PharmaCare Database Schema for PostgreSQL
+-- This file is for reference only - tables are auto-created by initDatabase.js
 
-CREATE DATABASE IF NOT EXISTS pharmacare;
-USE pharmacare;
+-- Schema
+CREATE SCHEMA IF NOT EXISTS spotmedpharmacare;
+SET search_path TO spotmedpharmacare, public;
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (
@@ -11,11 +12,12 @@ CREATE TABLE IF NOT EXISTS users (
   email VARCHAR(255) UNIQUE NOT NULL,
   password VARCHAR(255) NOT NULL,
   name VARCHAR(100) NOT NULL,
-  role ENUM('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER') DEFAULT 'CASHIER',
+  phone VARCHAR(50),
+  role VARCHAR(20) DEFAULT 'CASHIER' CHECK (role IN ('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER')),
   active BOOLEAN DEFAULT TRUE,
-  last_login DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  last_login TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Categories table
@@ -23,15 +25,16 @@ CREATE TABLE IF NOT EXISTS categories (
   id VARCHAR(36) PRIMARY KEY,
   name VARCHAR(100) UNIQUE NOT NULL,
   description TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Medicines table
+-- Medicines table with ALL columns
 CREATE TABLE IF NOT EXISTS medicines (
   id VARCHAR(36) PRIMARY KEY,
   name VARCHAR(255) NOT NULL,
   generic_name VARCHAR(255),
+  category VARCHAR(100),
   category_id VARCHAR(36),
   description TEXT,
   manufacturer VARCHAR(255),
@@ -42,9 +45,11 @@ CREATE TABLE IF NOT EXISTS medicines (
   expiry_date DATE,
   batch_number VARCHAR(100),
   requires_prescription BOOLEAN DEFAULT FALSE,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
+  product_type VARCHAR(50),
+  units JSONB,
+  image_url TEXT,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Suppliers table
@@ -59,39 +64,43 @@ CREATE TABLE IF NOT EXISTS suppliers (
   country VARCHAR(100),
   notes TEXT,
   active BOOLEAN DEFAULT TRUE,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Stock movements table
 CREATE TABLE IF NOT EXISTS stock_movements (
   id VARCHAR(36) PRIMARY KEY,
   medicine_id VARCHAR(36) NOT NULL,
-  type ENUM('ADDITION', 'SALE', 'LOSS', 'ADJUSTMENT', 'PURCHASE') NOT NULL,
+  medicine_name VARCHAR(255),
+  type VARCHAR(20) NOT NULL CHECK (type IN ('ADDITION', 'SALE', 'LOSS', 'ADJUSTMENT', 'PURCHASE')),
   quantity INT NOT NULL,
   batch_number VARCHAR(100),
   reference_id VARCHAR(36),
+  reason TEXT,
   notes TEXT,
   created_by VARCHAR(36),
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (medicine_id) REFERENCES medicines(id) ON DELETE CASCADE,
-  FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+  performed_by_name VARCHAR(100),
+  performed_by_role VARCHAR(50),
+  previous_stock INT DEFAULT 0,
+  new_stock INT DEFAULT 0,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Sales table
 CREATE TABLE IF NOT EXISTS sales (
   id VARCHAR(36) PRIMARY KEY,
   cashier_id VARCHAR(36) NOT NULL,
+  cashier_name VARCHAR(100),
   total_amount DECIMAL(10, 2) DEFAULT 0,
   discount DECIMAL(10, 2) DEFAULT 0,
   final_amount DECIMAL(10, 2) DEFAULT 0,
   profit DECIMAL(10, 2) DEFAULT 0,
-  payment_method ENUM('CASH', 'CARD', 'MPESA', 'CREDIT') DEFAULT 'CASH',
+  payment_method VARCHAR(20) DEFAULT 'CASH' CHECK (payment_method IN ('CASH', 'CARD', 'MPESA', 'CREDIT')),
   customer_name VARCHAR(100),
   customer_phone VARCHAR(50),
   notes TEXT,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  FOREIGN KEY (cashier_id) REFERENCES users(id)
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Sale items table
@@ -99,11 +108,14 @@ CREATE TABLE IF NOT EXISTS sale_items (
   id VARCHAR(36) PRIMARY KEY,
   sale_id VARCHAR(36) NOT NULL,
   medicine_id VARCHAR(36) NOT NULL,
+  medicine_name VARCHAR(255),
   quantity INT NOT NULL,
+  unit_type VARCHAR(50),
+  unit_label VARCHAR(100),
   unit_price DECIMAL(10, 2) NOT NULL,
+  cost_price DECIMAL(10, 2) DEFAULT 0,
   subtotal DECIMAL(10, 2) NOT NULL,
-  FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
-  FOREIGN KEY (medicine_id) REFERENCES medicines(id)
+  profit DECIMAL(10, 2) DEFAULT 0
 );
 
 -- Expenses table
@@ -116,15 +128,15 @@ CREATE TABLE IF NOT EXISTS expenses (
   vendor VARCHAR(255),
   receipt_number VARCHAR(100),
   notes TEXT,
-  status ENUM('PENDING', 'APPROVED', 'REJECTED') DEFAULT 'PENDING',
+  status VARCHAR(20) DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
   rejection_reason TEXT,
   created_by VARCHAR(36),
+  created_by_name VARCHAR(100),
   approved_by VARCHAR(36),
-  approved_at DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (created_by) REFERENCES users(id),
-  FOREIGN KEY (approved_by) REFERENCES users(id)
+  approved_by_name VARCHAR(100),
+  approved_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Prescriptions table
@@ -135,14 +147,14 @@ CREATE TABLE IF NOT EXISTS prescriptions (
   doctor_name VARCHAR(100),
   diagnosis TEXT,
   notes TEXT,
-  status ENUM('PENDING', 'DISPENSED', 'CANCELLED') DEFAULT 'PENDING',
+  status VARCHAR(20) DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'DISPENSED', 'CANCELLED')),
   created_by VARCHAR(36),
+  created_by_name VARCHAR(100),
   dispensed_by VARCHAR(36),
-  dispensed_at DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (created_by) REFERENCES users(id),
-  FOREIGN KEY (dispensed_by) REFERENCES users(id)
+  dispensed_by_name VARCHAR(100),
+  dispensed_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Prescription items table
@@ -150,13 +162,12 @@ CREATE TABLE IF NOT EXISTS prescription_items (
   id VARCHAR(36) PRIMARY KEY,
   prescription_id VARCHAR(36) NOT NULL,
   medicine_id VARCHAR(36) NOT NULL,
+  medicine_name VARCHAR(255),
   quantity INT NOT NULL,
   dosage VARCHAR(100),
   frequency VARCHAR(100),
   duration VARCHAR(100),
-  instructions TEXT,
-  FOREIGN KEY (prescription_id) REFERENCES prescriptions(id) ON DELETE CASCADE,
-  FOREIGN KEY (medicine_id) REFERENCES medicines(id)
+  instructions TEXT
 );
 
 -- Purchase orders table
@@ -164,23 +175,26 @@ CREATE TABLE IF NOT EXISTS purchase_orders (
   id VARCHAR(36) PRIMARY KEY,
   order_number VARCHAR(50) UNIQUE NOT NULL,
   supplier_id VARCHAR(36) NOT NULL,
+  supplier_name VARCHAR(255),
+  subtotal DECIMAL(10, 2) DEFAULT 0,
+  tax DECIMAL(10, 2) DEFAULT 0,
+  total DECIMAL(10, 2) DEFAULT 0,
   total_amount DECIMAL(10, 2) DEFAULT 0,
-  status ENUM('DRAFT', 'SUBMITTED', 'APPROVED', 'RECEIVED', 'CANCELLED') DEFAULT 'DRAFT',
+  status VARCHAR(20) DEFAULT 'DRAFT' CHECK (status IN ('DRAFT', 'SUBMITTED', 'APPROVED', 'RECEIVED', 'CANCELLED')),
   notes TEXT,
   expected_delivery_date DATE,
   cancellation_reason TEXT,
   created_by VARCHAR(36),
+  created_by_name VARCHAR(100),
   approved_by VARCHAR(36),
-  approved_at DATETIME,
+  approved_by_name VARCHAR(100),
+  approved_at TIMESTAMP,
   received_by VARCHAR(36),
-  received_at DATETIME,
-  submitted_at DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (supplier_id) REFERENCES suppliers(id),
-  FOREIGN KEY (created_by) REFERENCES users(id),
-  FOREIGN KEY (approved_by) REFERENCES users(id),
-  FOREIGN KEY (received_by) REFERENCES users(id)
+  received_by_name VARCHAR(100),
+  received_at TIMESTAMP,
+  submitted_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Purchase order items table
@@ -188,11 +202,12 @@ CREATE TABLE IF NOT EXISTS purchase_order_items (
   id VARCHAR(36) PRIMARY KEY,
   purchase_order_id VARCHAR(36) NOT NULL,
   medicine_id VARCHAR(36) NOT NULL,
+  medicine_name VARCHAR(255),
   quantity INT NOT NULL,
-  unit_price DECIMAL(10, 2) NOT NULL,
-  subtotal DECIMAL(10, 2) NOT NULL,
-  FOREIGN KEY (purchase_order_id) REFERENCES purchase_orders(id) ON DELETE CASCADE,
-  FOREIGN KEY (medicine_id) REFERENCES medicines(id)
+  unit_price DECIMAL(10, 2) DEFAULT 0,
+  unit_cost DECIMAL(10, 2) DEFAULT 0,
+  subtotal DECIMAL(10, 2) DEFAULT 0,
+  total_cost DECIMAL(10, 2) DEFAULT 0
 );
 
 -- Employees table
@@ -212,43 +227,42 @@ CREATE TABLE IF NOT EXISTS employees (
   tax_id VARCHAR(50),
   address TEXT,
   active BOOLEAN DEFAULT TRUE,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
 -- Payroll table
 CREATE TABLE IF NOT EXISTS payroll (
   id VARCHAR(36) PRIMARY KEY,
   employee_id VARCHAR(36) NOT NULL,
-  pay_period VARCHAR(7) NOT NULL, -- Format: YYYY-MM
+  employee_name VARCHAR(100),
+  pay_period VARCHAR(7) NOT NULL,
   basic_salary DECIMAL(10, 2) NOT NULL,
   allowances DECIMAL(10, 2) DEFAULT 0,
   deductions DECIMAL(10, 2) DEFAULT 0,
   net_salary DECIMAL(10, 2) NOT NULL,
-  status ENUM('PENDING', 'APPROVED', 'PAID') DEFAULT 'PENDING',
+  status VARCHAR(20) DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'PAID')),
   notes TEXT,
   paid_by VARCHAR(36),
-  paid_at DATETIME,
-  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  FOREIGN KEY (employee_id) REFERENCES employees(id) ON DELETE CASCADE,
-  FOREIGN KEY (paid_by) REFERENCES users(id)
+  paid_by_name VARCHAR(100),
+  paid_at TIMESTAMP,
+  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Create indexes for better performance
-CREATE INDEX idx_medicines_category ON medicines(category_id);
-CREATE INDEX idx_medicines_expiry ON medicines(expiry_date);
-CREATE INDEX idx_stock_movements_medicine ON stock_movements(medicine_id);
-CREATE INDEX idx_stock_movements_date ON stock_movements(created_at);
-CREATE INDEX idx_sales_date ON sales(created_at);
-CREATE INDEX idx_sales_cashier ON sales(cashier_id);
-CREATE INDEX idx_expenses_date ON expenses(expense_date);
-CREATE INDEX idx_expenses_status ON expenses(status);
-CREATE INDEX idx_prescriptions_status ON prescriptions(status);
-CREATE INDEX idx_purchase_orders_status ON purchase_orders(status);
-CREATE INDEX idx_payroll_period ON payroll(pay_period);
-CREATE INDEX idx_payroll_employee ON payroll(employee_id);
-
--- Done!
-SELECT 'PharmaCare database schema created successfully!' AS message;
+-- Create indexes
+CREATE INDEX IF NOT EXISTS idx_medicines_category ON medicines(category);
+CREATE INDEX IF NOT EXISTS idx_medicines_expiry ON medicines(expiry_date);
+CREATE INDEX IF NOT EXISTS idx_medicines_batch ON medicines(batch_number);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_medicine ON stock_movements(medicine_id);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_date ON stock_movements(created_at);
+CREATE INDEX IF NOT EXISTS idx_stock_movements_type ON stock_movements(type);
+CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(created_at);
+CREATE INDEX IF NOT EXISTS idx_sales_cashier ON sales(cashier_id);
+CREATE INDEX IF NOT EXISTS idx_expenses_date ON expenses(expense_date);
+CREATE INDEX IF NOT EXISTS idx_expenses_status ON expenses(status);
+CREATE INDEX IF NOT EXISTS idx_prescriptions_status ON prescriptions(status);
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+CREATE INDEX IF NOT EXISTS idx_purchase_orders_supplier ON purchase_orders(supplier_id);
+CREATE INDEX IF NOT EXISTS idx_payroll_period ON payroll(pay_period);
+CREATE INDEX IF NOT EXISTS idx_payroll_employee ON payroll(employee_id);

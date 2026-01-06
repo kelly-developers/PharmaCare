@@ -1,12 +1,12 @@
 # PharmaCare Backend API
 
-A complete Node.js/Express backend for the PharmaCare Pharmacy Management System.
+A complete Node.js/Express backend for the PharmaCare Pharmacy Management System with PostgreSQL.
 
 ## Features
 
 - 🔐 JWT Authentication with role-based access control
 - 👥 User Management (ADMIN, MANAGER, PHARMACIST, CASHIER roles)
-- 💊 Medicine & Category Management
+- 💊 Medicine & Category Management with product types and units
 - 📦 Stock Management with movement tracking
 - 💰 Sales & POS functionality
 - 📋 Prescription Management
@@ -16,213 +16,120 @@ A complete Node.js/Express backend for the PharmaCare Pharmacy Management System
 - 👨‍💼 Employee & Payroll Management
 - 📊 Comprehensive Reports
 
-## Prerequisites
+## Quick Start
 
-- Node.js 18+ 
-- MySQL 8.0+
-
-## Setup
-
-### 1. InstallDependencies
+### 1. Install Dependencies
 
 ```bash
-cd backend
 npm install
 ```
 
 ### 2. Configure Environment
 
-Copy the example environment file and update with your settings:
+Copy the example environment file:
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` with your database credentials:
+### 3. Start the Server
 
-```env
-PORT=3001
-DB_HOST=localhost
-DB_PORT=3306
-DB_NAME=pharmacare
-DB_USER=root
-DB_PASSWORD=your_password
-JWT_SECRET=your-super-secret-jwt-key
-CORS_ORIGIN=http://localhost:5173
-```
-
-### 3. Create Database Schema
-
-Run the SQL schema script in your MySQL client:
-
-```bash
-mysql -u root -p < src/scripts/schema.sql
-```
-
-Or manually run the contents of `src/scripts/schema.sql` in your MySQL client.
-
-### 4. Seed Initial Data (Optional)
-
-```bash
-npm run seed
-```
-
-This creates:
-- Admin user: `admin` / `admin123`
-- Manager user: `manager` / `manager123`
-- Pharmacist user: `pharmacist` / `pharmacist123`
-- Cashier user: `cashier` / `cashier123`
-- Sample categories and medicines
-- Sample suppliers
-
-### 5. Start the Server
-
-Development mode (with auto-reload):
-```bash
-npm run dev
-```
-
-Production mode:
 ```bash
 npm start
 ```
 
-The server will start on `http://localhost:3001`
-
-## API Endpoints
-
-### Authentication
-- `POST /api/auth/login` - Login
-- `POST /api/auth/register` - Register new user
-- `GET /api/auth/me` - Get current user
-
-### Users
-- `GET /api/users` - List users (Admin only)
-- `GET /api/users/:id` - Get user by ID
-- `POST /api/users` - Create user (Admin only)
-- `PUT /api/users/:id` - Update user
-- `DELETE /api/users/:id` - Deactivate user (Admin only)
-- `PATCH /api/users/:id/activate` - Activate user (Admin only)
-
-### Categories
-- `GET /api/categories` - List all categories
-- `GET /api/categories/:id` - Get category by ID
-- `POST /api/categories` - Create category
-- `PUT /api/categories/:id` - Update category
-- `DELETE /api/categories/:id` - Delete category
-- `GET /api/categories/stats` - Get category statistics
-
-### Medicines
-- `GET /api/medicines` - List medicines (paginated)
-- `GET /api/medicines/:id` - Get medicine by ID
-- `POST /api/medicines` - Create medicine
-- `PUT /api/medicines/:id` - Update medicine
-- `DELETE /api/medicines/:id` - Delete medicine (Admin only)
-- `POST /api/medicines/:id/add-stock` - Add stock
-- `POST /api/medicines/:id/deduct-stock` - Deduct stock
-- `GET /api/medicines/low-stock` - Get low stock items
-- `GET /api/medicines/expiring` - Get expiring medicines
-
-### Stock
-- `GET /api/stock/movements` - List stock movements
-- `POST /api/stock/loss` - Record stock loss
-- `POST /api/stock/adjustment` - Record adjustment
-- `GET /api/stock/monthly` - Monthly summary
-- `GET /api/stock/breakdown` - Stock breakdown by category
-
-### Sales
-- `GET /api/sales` - List sales (paginated)
-- `GET /api/sales/:id` - Get sale by ID
-- `POST /api/sales` - Create sale
-- `DELETE /api/sales/:id` - Void sale (Admin only)
-- `GET /api/sales/today` - Today's summary
-- `GET /api/sales/report` - Sales report
-
-### Expenses
-- `GET /api/expenses` - List expenses
-- `POST /api/expenses` - Create expense
-- `PATCH /api/expenses/:id/approve` - Approve expense
-- `PATCH /api/expenses/:id/reject` - Reject expense
-
-### Prescriptions
-- `GET /api/prescriptions` - List prescriptions
-- `POST /api/prescriptions` - Create prescription
-- `PATCH /api/prescriptions/:id/status` - Update status
-
-### Purchase Orders
-- `GET /api/purchase-orders` - List orders
-- `POST /api/purchase-orders` - Create order
-- `PATCH /api/purchase-orders/:id/submit` - Submit order
-- `PATCH /api/purchase-orders/:id/approve` - Approve order
-- `PATCH /api/purchase-orders/:id/receive` - Receive order
-
-### Employees & Payroll
-- `GET /api/employees` - List employees
-- `POST /api/employees` - Create employee
-- `GET /api/employees/:id/payroll` - Get employee payroll
-- `POST /api/employees/payroll` - Create payroll entry
-
-### Reports
-- `GET /api/reports/dashboard` - Dashboard summary
-- `GET /api/reports/sales-summary` - Sales summary
-- `GET /api/reports/stock-summary` - Stock summary
-- `GET /api/reports/balance-sheet` - Balance sheet
-- `GET /api/reports/income-statement` - Income statement
-- `GET /api/reports/profit/summary` - Profit summary
+**Tables are created automatically** when the server starts. No manual SQL needed!
 
 ## Deployment on Render
 
-### 1. Create a Render Account
+### Environment Variables
 
-Go to [render.com](https://render.com) and sign up.
+Set these in your Render dashboard:
 
-### 2. Create MySQL Database
+| Variable | Example Value |
+|----------|---------------|
+| `DATASOURCE_URL` | `jdbc:postgresql://host:5432/db?currentSchema=myschema` |
+| `DATASOURCE_USER` | `your_db_user` |
+| `DATASOURCE_PASSWORD` | `your_db_password` |
+| `DB_SCHEMA` | `spotmedpharmacare` |
+| `JWT_SECRET` | `your-secure-jwt-secret-key` |
+| `ALLOWED_ORIGINS` | `https://your-frontend.netlify.app` |
+| `ADMIN_ENABLED` | `true` |
+| `ADMIN_EMAIL` | `admin@example.com` |
+| `ADMIN_PASSWORD` | `SecurePassword123` |
+| `ADMIN_NAME` | `System Administrator` |
+| `ADMIN_PHONE` | `+254700000000` |
 
-1. Go to Dashboard → New → PostgreSQL (or use external MySQL)
-2. Note down the connection details
+### Render Configuration
 
-For MySQL, you can use:
-- PlanetScale (free tier available)
-- Railway
-- DigitalOcean Managed MySQL
+- **Build Command**: `npm install`
+- **Start Command**: `npm start`
+- **Health Check Path**: `/health`
 
-### 3. Create Web Service
+## API Documentation
 
-1. Go to Dashboard → New → Web Service
-2. Connect your GitHub repository
-3. Configure:
-   - **Name**: pharmacare-api
-   - **Region**: Choose closest to your users
-   - **Branch**: main
-   - **Root Directory**: backend
-   - **Runtime**: Node
-   - **Build Command**: `npm install`
-   - **Start Command**: `npm start`
+See [docs/API_ENDPOINTS.md](docs/API_ENDPOINTS.md) for complete API documentation with examples.
 
-4. Add Environment Variables:
-   - `PORT`: 10000 (Render assigns port)
-   - `DB_HOST`: Your MySQL host
-   - `DB_PORT`: 3306
-   - `DB_NAME`: pharmacare
-   - `DB_USER`: Your MySQL user
-   - `DB_PASSWORD`: Your MySQL password
-   - `JWT_SECRET`: Generate a secure random string
-   - `CORS_ORIGIN`: Your frontend URL
-   - `NODE_ENV`: production
+### Key Endpoints
 
-5. Deploy!
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/auth/login` | User login |
+| `GET /api/medicines` | List medicines |
+| `POST /api/medicines` | Create medicine (with batch_number, expiry_date, cost_price, stock_quantity) |
+| `POST /api/medicines/:id/add-stock` | Add stock to medicine |
+| `POST /api/sales` | Create sale (POS) |
+| `POST /api/purchase-orders` | Create purchase order |
+| `PATCH /api/purchase-orders/:id/receive` | Receive order (auto-adds stock) |
+| `GET /api/reports/dashboard` | Dashboard summary |
 
-### 4. Update Frontend
+## Medicine Creation Example
 
-Update your frontend API base URL to point to your Render deployment URL.
+```json
+POST /api/medicines
+{
+  "name": "Paracetamol 500mg",
+  "category": "Tablets",
+  "manufacturer": "Pharma Co",
+  "unit_price": 10.00,
+  "cost_price": 5.00,
+  "stock_quantity": 100,
+  "reorder_level": 20,
+  "expiry_date": "2025-12-31",
+  "batch_number": "BATCH001",
+  "product_type": "Tablets",
+  "units": [
+    { "id": "1", "type": "Box", "label": "Box (100 tablets)", "quantity": 100, "price": 500 },
+    { "id": "2", "type": "Strip", "label": "Strip (10 tablets)", "quantity": 10, "price": 60 }
+  ]
+}
+```
 
-## Security Notes
+## Adding Stock Example
 
-- Always use strong passwords in production
-- Generate a secure `JWT_SECRET` (at least 32 characters)
-- Enable HTTPS in production
-- Regularly update dependencies
-- Use connection pooling for database
+```json
+POST /api/medicines/:id/add-stock
+{
+  "quantity": 50,
+  "batch_number": "BATCH002",
+  "notes": "New shipment"
+}
+```
+
+## Purchase Order Workflow
+
+1. Create order: `POST /api/purchase-orders`
+2. Submit: `PATCH /api/purchase-orders/:id/submit`
+3. Approve: `PATCH /api/purchase-orders/:id/approve`
+4. Receive (auto-adds stock): `PATCH /api/purchase-orders/:id/receive`
+
+## Scripts
+
+```bash
+npm start      # Start production server
+npm run dev    # Start with nodemon (development)
+npm run seed   # Seed sample data
+```
 
 ## License
 
