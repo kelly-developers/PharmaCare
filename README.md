@@ -23,7 +23,7 @@ A complete Node.js/Express backend for the PharmaCare Pharmacy Management System
 
 ## Setup
 
-### 1. Install Dependencies
+### 1. InstallDependencies
 
 ```bash
 cd backend
