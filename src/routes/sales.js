@@ -259,30 +259,42 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async
 
 // POST /api/sales - Create sale
 router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, next) => {
+  const { pool } = require('../config/database');
+  const client = await pool.connect();
+  
   try {
     const { items, payment_method, customer_name, customer_phone, discount, notes } = req.body;
+
+    console.log('Creating sale with items:', JSON.stringify(items, null, 2));
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, error: 'Sale items are required' });
     }
 
+    // Start transaction
+    await client.query('BEGIN');
+    await client.query(`SET search_path TO ${process.env.DB_SCHEMA || 'spotmedpharmacare'}, public`);
+
     const saleId = uuidv4();
-    const transactionId = generateTransactionId(); // Generated but not stored in database
+    const transactionId = generateTransactionId();
     let subtotal = 0;
     let totalProfit = 0;
+    let totalCost = 0;
 
     // Calculate totals and validate stock
     for (const item of items) {
-      const [medicines] = await query(
+      const medicineResult = await client.query(
         'SELECT id, name, unit_price, cost_price, stock_quantity, units FROM medicines WHERE id = $1',
         [item.medicine_id]
       );
 
-      if (medicines.length === 0) {
+      if (medicineResult.rows.length === 0) {
+        await client.query('ROLLBACK');
         return res.status(400).json({ success: false, error: `Medicine not found: ${item.medicine_id}` });
       }
 
-      const medicine = medicines[0];
+      const medicine = medicineResult.rows[0];
+      console.log('Medicine found:', medicine.name, 'unit_price:', medicine.unit_price, 'cost_price:', medicine.cost_price);
 
       // Calculate stock needed based on unit type
       let stockNeeded = item.quantity;
@@ -294,39 +306,52 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
             stockNeeded = item.quantity * unitConfig.quantity;
           }
         } catch (e) {
-          // If units parsing fails, use quantity as-is
+          console.log('Units parsing error:', e.message);
         }
       }
 
       if (medicine.stock_quantity < stockNeeded) {
+        await client.query('ROLLBACK');
         return res.status(400).json({ 
           success: false, 
           error: `Insufficient stock for ${medicine.name}. Available: ${medicine.stock_quantity}` 
         });
       }
 
+      // Use item's unit_price if provided, otherwise use medicine's unit_price
       item.unit_price = parseFloat(item.unit_price) || parseFloat(medicine.unit_price) || 0;
       item.cost_price = parseFloat(medicine.cost_price) || 0;
       item.subtotal = item.unit_price * item.quantity;
-      item.profit = (item.unit_price - item.cost_price) * item.quantity;
+      
+      // Calculate profit per item (selling price - cost price) * quantity
+      // For unit-based sales, multiply cost by stock units deducted
+      const costForThisItem = item.cost_price * stockNeeded;
+      item.profit = item.subtotal - costForThisItem;
+      
       item.stock_deduction = stockNeeded;
       item.medicine_name = medicine.name;
 
+      console.log(`Item: ${medicine.name}, qty: ${item.quantity}, stock_deduction: ${stockNeeded}, unit_price: ${item.unit_price}, cost_price: ${item.cost_price}, subtotal: ${item.subtotal}, profit: ${item.profit}`);
+
       subtotal += item.subtotal;
       totalProfit += item.profit;
+      totalCost += costForThisItem;
     }
 
     // Apply discount and calculate totals
     const discountAmount = parseFloat(discount) || 0;
-    const finalAmount = subtotal - discountAmount; // This is what goes into final_amount column
+    const finalAmount = subtotal - discountAmount;
+    // Adjust profit for discount
+    const finalProfit = totalProfit - discountAmount;
+
+    console.log('Sale totals - subtotal:', subtotal, 'discount:', discountAmount, 'final:', finalAmount, 'profit:', finalProfit);
 
     // Get cashier name
-    const [userResult] = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
-    const cashierName = getFirst(userResult).name || 'Unknown';
+    const userResult = await client.query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    const cashierName = userResult.rows[0]?.name || 'Unknown';
 
-    // CORRECTED: Insert only columns that exist in your database schema
-    // Your schema has: total_amount, discount, final_amount, profit (no subtotal, tax, total, cost_of_goods_sold, transaction_id)
-    await query(`
+    // Insert sale record
+    await client.query(`
       INSERT INTO sales (
         id, cashier_id, cashier_name, total_amount, discount, final_amount,
         profit, payment_method, customer_name, customer_phone, notes, created_at
@@ -336,21 +361,24 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
       saleId, 
       req.user.id, 
       cashierName, 
-      subtotal,           // total_amount column - the subtotal before discount
-      discountAmount,     // discount column
-      finalAmount,        // final_amount column - the amount after discount
-      totalProfit,        // profit column
+      subtotal,
+      discountAmount,
+      finalAmount,
+      finalProfit,
       payment_method || 'CASH', 
       customer_name || null, 
       customer_phone || null, 
       notes || null
     ]);
 
+    console.log('Sale inserted with ID:', saleId);
+
     // Create sale items and update stock
     for (const item of items) {
       const itemId = uuidv4();
 
-      await query(`
+      // Insert sale item
+      await client.query(`
         INSERT INTO sale_items (
           id, sale_id, medicine_id, medicine_name, quantity, unit_type, unit_label, 
           unit_price, cost_price, subtotal, profit
@@ -370,54 +398,64 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
         item.profit
       ]);
 
+      console.log('Sale item inserted:', itemId);
+
+      // Get current stock before update
+      const stockBefore = await client.query(
+        'SELECT stock_quantity FROM medicines WHERE id = $1',
+        [item.medicine_id]
+      );
+      const previousStock = parseInt(stockBefore.rows[0]?.stock_quantity) || 0;
+
       // Update medicine stock
-      await query(
+      await client.query(
         'UPDATE medicines SET stock_quantity = stock_quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
         [item.stock_deduction, item.medicine_id]
       );
 
-// Record stock movement - FIXED VERSION
-const movementId = uuidv4();
-// Get the stock AFTER the deduction to correctly calculate new_stock
-const [updatedMedicine] = await query(
-    'SELECT stock_quantity FROM medicines WHERE id = $1',
-    [item.medicine_id]
-);
-const newStock = parseInt(updatedMedicine[0]?.stock_quantity) || 0;
-const previousStock = newStock + item.stock_deduction; // Calculate what it was before
+      const newStock = previousStock - item.stock_deduction;
+      console.log('Stock updated for', item.medicine_name, ':', previousStock, '->', newStock);
 
-await query(`
-    INSERT INTO stock_movements (
-        id, medicine_id, medicine_name, type, quantity, reference_id,
-        created_by, performed_by_name, performed_by_role,
-        previous_stock, new_stock, created_at
-    )
-    VALUES ($1, $2, $3, 'SALE', $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
-`, [
-    movementId,
-    item.medicine_id,
-    item.medicine_name,
-    -Math.abs(item.stock_deduction), // Negative quantity for deduction
-    saleId,
-    req.user.id,
-    cashierName,
-    req.user.role,
-    previousStock, // Correctly calculated previous stock
-    newStock       // Correctly fetched new stock
-]);
+      // Record stock movement
+      const movementId = uuidv4();
+      await client.query(`
+        INSERT INTO stock_movements (
+          id, medicine_id, medicine_name, type, quantity, reference_id,
+          created_by, performed_by_name, performed_by_role,
+          previous_stock, new_stock, created_at
+        )
+        VALUES ($1, $2, $3, 'SALE', $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+      `, [
+        movementId,
+        item.medicine_id,
+        item.medicine_name,
+        -Math.abs(item.stock_deduction),
+        saleId,
+        req.user.id,
+        cashierName,
+        req.user.role,
+        previousStock,
+        newStock
+      ]);
+
+      console.log('Stock movement recorded:', movementId);
     }
+
+    // Commit transaction
+    await client.query('COMMIT');
+    console.log('Transaction committed successfully');
 
     res.status(201).json({
       success: true,
       data: {
         id: saleId,
-        transaction_id: transactionId, // Generated but not stored in database
+        transaction_id: transactionId,
         cashier_id: req.user.id,
         cashier_name: cashierName,
         total_amount: subtotal,
         discount: discountAmount,
         final_amount: finalAmount,
-        profit: totalProfit,
+        profit: finalProfit,
         payment_method: payment_method || 'CASH',
         items: items.map(i => ({
           medicine_id: i.medicine_id,
@@ -430,8 +468,12 @@ await query(`
       }
     });
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('Create sale error:', error);
+    console.error('Error stack:', error.stack);
     next(error);
+  } finally {
+    client.release();
   }
 });
 
