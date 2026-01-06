@@ -167,23 +167,46 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CA
 // POST /api/medicines - Create medicine
 router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
+    console.log('📥 Received medicine data:', req.body);
+    
+    // Handle both naming conventions (frontend camelCase vs backend snake_case)
     const {
       name,
       category,
       generic_name,
+      genericName, // from frontend
       description,
       manufacturer,
       unit_price,
+      unitPrice, // from frontend
       cost_price,
+      costPrice, // from frontend
       stock_quantity,
+      stockQuantity, // from frontend
       reorder_level = 10,
+      reorderLevel, // from frontend
       expiry_date,
+      expiryDate, // from frontend
       batch_number,
+      batchNumber, // from frontend
       requires_prescription = false,
       product_type,
+      productType, // from frontend
       units,
       image_url,
+      imageUrl, // from frontend
     } = req.body;
+
+    // Use snake_case if provided, otherwise use camelCase from frontend
+    const finalGenericName = generic_name || genericName;
+    const finalUnitPrice = unit_price || unitPrice;
+    const finalCostPrice = cost_price || costPrice;
+    const finalStockQuantity = stock_quantity || stockQuantity;
+    const finalReorderLevel = reorder_level || reorderLevel;
+    const finalExpiryDate = expiry_date || expiryDate;
+    const finalBatchNumber = batch_number || batchNumber;
+    const finalProductType = product_type || productType;
+    const finalImageUrl = image_url || imageUrl;
 
     // Validate required fields
     if (!name || !name.trim()) {
@@ -200,22 +223,99 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
       });
     }
 
-    // Validate numeric fields
-    if (cost_price !== undefined && (isNaN(cost_price) || cost_price < 0)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Cost price must be a non-negative number' 
+    // Validate numeric fields with defaults
+    const unitPriceValue = finalUnitPrice ? parseFloat(finalUnitPrice) : 0;
+    const costPriceValue = finalCostPrice ? parseFloat(finalCostPrice) : 0;
+    const stockQuantityValue = finalStockQuantity ? parseInt(finalStockQuantity) : 0;
+    const reorderLevelValue = finalReorderLevel ? parseInt(finalReorderLevel) : 10;
+
+    if (isNaN(unitPriceValue) || unitPriceValue < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Unit price must be a valid non-negative number'
       });
     }
 
-    if (stock_quantity !== undefined && (isNaN(stock_quantity) || stock_quantity < 0)) {
-      return res.status(400).json({ 
-        success: false, 
-        error: 'Stock quantity must be a non-negative number' 
+    if (isNaN(costPriceValue) || costPriceValue < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Cost price must be a valid non-negative number'
       });
+    }
+
+    if (isNaN(stockQuantityValue) || stockQuantityValue < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Stock quantity must be a valid non-negative number'
+      });
+    }
+
+    if (isNaN(reorderLevelValue) || reorderLevelValue < 0) {
+      return res.status(400).json({
+        success: false,
+        error: 'Reorder level must be a valid non-negative number'
+      });
+    }
+
+    // Validate expiry date if provided
+    let expiryDateValue = null;
+    if (finalExpiryDate && finalExpiryDate.trim() !== '') {
+      const expiryDate = new Date(finalExpiryDate);
+      if (isNaN(expiryDate.getTime())) {
+        return res.status(400).json({
+          success: false,
+          error: 'Expiry date must be a valid date (YYYY-MM-DD)'
+        });
+      }
+      expiryDateValue = finalExpiryDate;
+    }
+
+    // Calculate unit_price from units if not provided
+    let calculatedUnitPrice = unitPriceValue;
+    if (calculatedUnitPrice === 0 && units && Array.isArray(units) && units.length > 0) {
+      // Find the first unit with a price
+      const firstUnitWithPrice = units.find(unit => unit.price > 0);
+      if (firstUnitWithPrice) {
+        calculatedUnitPrice = parseFloat(firstUnitWithPrice.price);
+        console.log(`🔢 Calculated unit price from units: ${calculatedUnitPrice}`);
+      }
     }
 
     const id = uuidv4();
+
+    // Prepare insert data with proper handling of empty strings
+    const insertData = [
+      id, 
+      name.trim(), 
+      finalGenericName && finalGenericName.trim() ? finalGenericName.trim() : null,
+      category.trim(),
+      description && description.trim() ? description.trim() : null,
+      manufacturer && manufacturer.trim() ? manufacturer.trim() : null,
+      calculatedUnitPrice, // Use calculated unit price
+      costPriceValue,
+      stockQuantityValue,
+      reorderLevelValue,
+      expiryDateValue,
+      finalBatchNumber && finalBatchNumber.trim() ? finalBatchNumber.trim() : null,
+      Boolean(requires_prescription),
+      finalProductType && finalProductType.trim() ? finalProductType.trim() : null,
+      units ? JSON.stringify(units) : null,
+      finalImageUrl && finalImageUrl.trim() ? finalImageUrl.trim() : null,
+    ];
+
+    console.log('📦 Inserting medicine with data:', {
+      id,
+      name: name.trim(),
+      generic_name: finalGenericName,
+      category: category.trim(),
+      unit_price: calculatedUnitPrice,
+      cost_price: costPriceValue,
+      stock_quantity: stockQuantityValue,
+      reorder_level: reorderLevelValue,
+      expiry_date: expiryDateValue,
+      batch_number: finalBatchNumber,
+      units: units ? JSON.stringify(units) : null,
+    });
 
     await query(`
       INSERT INTO medicines (
@@ -224,24 +324,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
         expiry_date, batch_number, requires_prescription, product_type, 
         units, image_url, created_at, updated_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `, [
-      id, 
-      name.trim(), 
-      generic_name || null, 
-      category.trim(),
-      description || null, 
-      manufacturer || null,
-      parseFloat(unit_price) || 0, 
-      parseFloat(cost_price) || 0, 
-      parseInt(stock_quantity) || 0, 
-      parseInt(reorder_level) || 10,
-      expiry_date || null, 
-      batch_number || null, 
-      Boolean(requires_prescription),
-      product_type || null,
-      units ? JSON.stringify(units) : null, 
-      image_url || null,
-    ]);
+    `, insertData);
 
     // Get the created medicine
     const [medicines] = await query(
@@ -249,14 +332,42 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
       [id]
     );
 
-    res.status(201).json({ success: true, data: medicines[0] });
-  } catch (error) {
-    console.error('Create medicine error:', error);
+    if (medicines.length === 0) {
+      return res.status(500).json({
+        success: false,
+        error: 'Failed to retrieve created medicine'
+      });
+    }
+
+    const medicine = medicines[0];
     
-    if (error.code === '23502') {
+    // Transform response to include calculated fields
+    const responseData = {
+      ...medicine,
+      status: medicine.stock_quantity === 0 ? 'Out of Stock' : 
+              medicine.stock_quantity <= medicine.reorder_level ? 'Low Stock' : 'In Stock',
+      stock_value: medicine.stock_quantity * medicine.cost_price,
+    };
+
+    res.status(201).json({ 
+      success: true, 
+      data: responseData,
+      message: 'Medicine created successfully'
+    });
+  } catch (error) {
+    console.error('❌ Create medicine error:', error);
+    
+    if (error.code === '23502') { // NOT NULL violation
       return res.status(400).json({
         success: false,
         error: 'Missing required field: ' + (error.column || 'unknown')
+      });
+    }
+    
+    if (error.code === '23505') { // Unique violation
+      return res.status(400).json({
+        success: false,
+        error: 'Medicine with this name already exists'
       });
     }
     
@@ -267,23 +378,46 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
 // PUT /api/medicines/:id - Update medicine
 router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
+    console.log('📝 Updating medicine:', req.params.id, req.body);
+    
+    // Handle both naming conventions
     const {
       name,
       category,
       generic_name,
+      genericName,
       description,
       manufacturer,
       unit_price,
+      unitPrice,
       cost_price,
+      costPrice,
       stock_quantity,
+      stockQuantity,
       reorder_level,
+      reorderLevel,
       expiry_date,
+      expiryDate,
       batch_number,
+      batchNumber,
       requires_prescription,
       product_type,
+      productType,
       units,
       image_url,
+      imageUrl,
     } = req.body;
+
+    // Use snake_case if provided, otherwise use camelCase
+    const finalGenericName = generic_name || genericName;
+    const finalUnitPrice = unit_price || unitPrice;
+    const finalCostPrice = cost_price || costPrice;
+    const finalStockQuantity = stock_quantity || stockQuantity;
+    const finalReorderLevel = reorder_level || reorderLevel;
+    const finalExpiryDate = expiry_date || expiryDate;
+    const finalBatchNumber = batch_number || batchNumber;
+    const finalProductType = product_type || productType;
+    const finalImageUrl = image_url || imageUrl;
 
     // Validate required fields
     if (!name || !name.trim()) {
@@ -304,6 +438,15 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
     const [existing] = await query('SELECT id FROM medicines WHERE id = $1', [req.params.id]);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, error: 'Medicine not found' });
+    }
+
+    // Calculate unit_price from units if not provided
+    let calculatedUnitPrice = finalUnitPrice ? parseFloat(finalUnitPrice) : 0;
+    if (calculatedUnitPrice === 0 && units && Array.isArray(units) && units.length > 0) {
+      const firstUnitWithPrice = units.find(unit => unit.price > 0);
+      if (firstUnitWithPrice) {
+        calculatedUnitPrice = parseFloat(firstUnitWithPrice.price);
+      }
     }
 
     await query(`
@@ -327,20 +470,20 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
       WHERE id = $16
     `, [
       name.trim(), 
-      generic_name || null, 
+      finalGenericName || null, 
       category.trim(),
       description || null, 
       manufacturer || null,
-      parseFloat(unit_price) || 0, 
-      parseFloat(cost_price) || 0, 
-      parseInt(stock_quantity) || 0, 
-      parseInt(reorder_level) || 10,
-      expiry_date || null, 
-      batch_number || null, 
+      calculatedUnitPrice, 
+      parseFloat(finalCostPrice) || 0, 
+      parseInt(finalStockQuantity) || 0, 
+      parseInt(finalReorderLevel) || 10,
+      finalExpiryDate || null, 
+      finalBatchNumber || null, 
       Boolean(requires_prescription),
-      product_type || null,
+      finalProductType || null,
       units ? JSON.stringify(units) : null, 
-      image_url || null,
+      finalImageUrl || null,
       req.params.id
     ]);
 
