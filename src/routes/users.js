@@ -6,11 +6,14 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Helper to safely get first result
+const getFirst = (results) => results[0] || {};
+
 // GET /api/users/profile - Get current user profile (must be before /:id)
 router.get('/profile', authenticate, async (req, res, next) => {
   try {
     const [users] = await query(
-      'SELECT id, username, email, name, role, active, created_at, last_login FROM users WHERE id = $1',
+      'SELECT id, username, email, name, role, phone, active, created_at, last_login FROM users WHERE id = $1',
       [req.user.id]
     );
 
@@ -23,15 +26,15 @@ router.get('/profile', authenticate, async (req, res, next) => {
 // PUT /api/users/profile - Update current user profile
 router.put('/profile', authenticate, async (req, res, next) => {
   try {
-    const { name, email } = req.body;
+    const { name, email, phone } = req.body;
 
     await query(
-      'UPDATE users SET name = $1, email = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
-      [name, email, req.user.id]
+      'UPDATE users SET name = $1, email = $2, phone = $3, updated_at = CURRENT_TIMESTAMP WHERE id = $4',
+      [name, email, phone || null, req.user.id]
     );
 
     const [users] = await query(
-      'SELECT id, username, email, name, role, active FROM users WHERE id = $1',
+      'SELECT id, username, email, name, role, phone, active FROM users WHERE id = $1',
       [req.user.id]
     );
 
@@ -44,8 +47,8 @@ router.put('/profile', authenticate, async (req, res, next) => {
 // GET /api/users/stats - Get user statistics (must be before /:id)
 router.get('/stats', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
-    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM users');
-    const [[{ active }]] = await query('SELECT COUNT(*) as active FROM users WHERE active = true');
+    const [totalResult] = await query('SELECT COUNT(*) as total FROM users');
+    const [activeResult] = await query('SELECT COUNT(*) as active FROM users WHERE active = true');
     
     // Get counts by role
     const [roleCounts] = await query(`
@@ -60,8 +63,8 @@ router.get('/stats', authenticate, authorize('ADMIN'), async (req, res, next) =>
     res.json({
       success: true,
       data: { 
-        totalUsers: parseInt(total), 
-        activeUsers: parseInt(active),
+        totalUsers: parseInt(getFirst(totalResult).total) || 0, 
+        activeUsers: parseInt(getFirst(activeResult).active) || 0,
         ...roleBreakdown
       }
     });
@@ -78,19 +81,20 @@ router.get('/role/:role', authenticate, authorize('ADMIN'), async (req, res, nex
     const offset = page * size;
 
     const [users] = await query(
-      `SELECT id, username, email, name, role, active, created_at 
+      `SELECT id, username, email, name, role, phone, active, created_at 
        FROM users WHERE role = $1 LIMIT $2 OFFSET $3`,
       [req.params.role, size, offset]
     );
 
-    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM users WHERE role = $1', [req.params.role]);
+    const [countResult] = await query('SELECT COUNT(*) as total FROM users WHERE role = $1', [req.params.role]);
+    const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
       data: {
         content: users,
-        totalElements: parseInt(total),
-        totalPages: Math.ceil(parseInt(total) / size),
+        totalElements: total,
+        totalPages: Math.ceil(total / size),
         page,
         size
       }
@@ -108,19 +112,20 @@ router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
     const offset = page * size;
 
     const [users] = await query(
-      `SELECT id, username, email, name, role, active, created_at, last_login 
+      `SELECT id, username, email, name, role, phone, active, created_at, last_login 
        FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
       [size, offset]
     );
 
-    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM users');
+    const [countResult] = await query('SELECT COUNT(*) as total FROM users');
+    const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
       data: {
         content: users,
-        totalElements: parseInt(total),
-        totalPages: Math.ceil(parseInt(total) / size),
+        totalElements: total,
+        totalPages: Math.ceil(total / size),
         page,
         size
       }
@@ -139,7 +144,7 @@ router.get('/:id', authenticate, async (req, res, next) => {
     }
 
     const [users] = await query(
-      'SELECT id, username, email, name, role, active, created_at, last_login FROM users WHERE id = $1',
+      'SELECT id, username, email, name, role, phone, active, created_at, last_login FROM users WHERE id = $1',
       [req.params.id]
     );
 
@@ -156,26 +161,39 @@ router.get('/:id', authenticate, async (req, res, next) => {
 // POST /api/users - Create user
 router.post('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
-    const { username, email, password, name, role } = req.body;
+    const { username, email, password, name, role, phone } = req.body;
 
     if (!username || !email || !password || !name || !role) {
-      return res.status(400).json({ success: false, error: 'All fields are required' });
+      return res.status(400).json({ success: false, error: 'Username, email, password, name, and role are required' });
+    }
+
+    // Check if user already exists
+    const [existing] = await query(
+      'SELECT id FROM users WHERE username = $1 OR email = $2',
+      [username, email]
+    );
+
+    if (existing.length > 0) {
+      return res.status(409).json({ success: false, error: 'Username or email already exists' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
     const id = uuidv4();
 
     await query(
-      `INSERT INTO users (id, username, email, password, name, role, active, created_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, true, CURRENT_TIMESTAMP)`,
-      [id, username, email, hashedPassword, name, role]
+      `INSERT INTO users (id, username, email, password, name, role, phone, active, created_at, updated_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [id, username, email, hashedPassword, name, role, phone || null]
     );
 
     res.status(201).json({
       success: true,
-      data: { id, username, email, name, role, active: true }
+      data: { id, username, email, name, role, phone, active: true }
     });
   } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ success: false, error: 'Username or email already exists' });
+    }
     next(error);
   }
 });
@@ -188,11 +206,11 @@ router.put('/:id', authenticate, async (req, res, next) => {
       return res.status(403).json({ success: false, error: 'Access denied' });
     }
 
-    const { name, email, role, password } = req.body;
+    const { name, email, role, phone, password } = req.body;
 
-    let queryText = 'UPDATE users SET name = $1, email = $2, updated_at = CURRENT_TIMESTAMP';
-    let params = [name, email];
-    let paramIndex = 2;
+    let queryText = 'UPDATE users SET name = $1, email = $2, phone = $3, updated_at = CURRENT_TIMESTAMP';
+    let params = [name, email, phone || null];
+    let paramIndex = 3;
 
     // Only admin can change role
     if (req.user.role === 'ADMIN' && role) {
@@ -216,9 +234,13 @@ router.put('/:id', authenticate, async (req, res, next) => {
     await query(queryText, params);
 
     const [users] = await query(
-      'SELECT id, username, email, name, role, active FROM users WHERE id = $1',
+      'SELECT id, username, email, name, role, phone, active FROM users WHERE id = $1',
       [req.params.id]
     );
+
+    if (users.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
 
     res.json({ success: true, data: users[0] });
   } catch (error) {
@@ -229,8 +251,13 @@ router.put('/:id', authenticate, async (req, res, next) => {
 // DELETE /api/users/:id - Deactivate user
 router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
+    // Prevent deleting own account
+    if (req.user.id === req.params.id) {
+      return res.status(400).json({ success: false, error: 'Cannot deactivate your own account' });
+    }
+
     await query('UPDATE users SET active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
-    res.json({ success: true });
+    res.json({ success: true, message: 'User deactivated successfully' });
   } catch (error) {
     next(error);
   }
@@ -242,7 +269,7 @@ router.patch('/:id/activate', authenticate, authorize('ADMIN'), async (req, res,
     await query('UPDATE users SET active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
 
     const [users] = await query(
-      'SELECT id, username, email, name, role, active FROM users WHERE id = $1',
+      'SELECT id, username, email, name, role, phone, active FROM users WHERE id = $1',
       [req.params.id]
     );
 

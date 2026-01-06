@@ -5,22 +5,23 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Helper to safely get first result
+const getFirst = (results) => results[0] || {};
+
 // GET /api/prescriptions/pending - Get pending prescriptions (must be before /:id)
 router.get('/pending', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
     const [prescriptions] = await query(`
-      SELECT p.*, u.name as created_by_name
+      SELECT p.*
       FROM prescriptions p
-      LEFT JOIN users u ON p.created_by = u.id
       WHERE p.status = 'PENDING'
       ORDER BY p.created_at DESC
     `);
 
     for (let prescription of prescriptions) {
       const [items] = await query(`
-        SELECT pi.*, m.name as medicine_name
+        SELECT pi.*
         FROM prescription_items pi
-        LEFT JOIN medicines m ON pi.medicine_id = m.id
         WHERE pi.prescription_id = $1
       `, [prescription.id]);
       prescription.items = items;
@@ -36,10 +37,8 @@ router.get('/pending', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST',
 router.get('/dispensed', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
     const [prescriptions] = await query(`
-      SELECT p.*, u.name as created_by_name, d.name as dispensed_by_name
+      SELECT p.*
       FROM prescriptions p
-      LEFT JOIN users u ON p.created_by = u.id
-      LEFT JOIN users d ON p.dispensed_by = d.id
       WHERE p.status = 'DISPENSED'
       ORDER BY p.dispensed_at DESC
     `);
@@ -54,18 +53,16 @@ router.get('/dispensed', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST
 router.get('/patient/:phone', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
     const [prescriptions] = await query(`
-      SELECT p.*, u.name as created_by_name
+      SELECT p.*
       FROM prescriptions p
-      LEFT JOIN users u ON p.created_by = u.id
       WHERE p.patient_phone = $1
       ORDER BY p.created_at DESC
     `, [req.params.phone]);
 
     for (let prescription of prescriptions) {
       const [items] = await query(`
-        SELECT pi.*, m.name as medicine_name
+        SELECT pi.*
         FROM prescription_items pi
-        LEFT JOIN medicines m ON pi.medicine_id = m.id
         WHERE pi.prescription_id = $1
       `, [prescription.id]);
       prescription.items = items;
@@ -81,9 +78,8 @@ router.get('/patient/:phone', authenticate, authorize('ADMIN', 'MANAGER', 'PHARM
 router.get('/creator/:userId', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
     const [prescriptions] = await query(`
-      SELECT p.*, u.name as created_by_name
+      SELECT p.*
       FROM prescriptions p
-      LEFT JOIN users u ON p.created_by = u.id
       WHERE p.created_by = $1
       ORDER BY p.created_at DESC
     `, [req.params.userId]);
@@ -97,16 +93,16 @@ router.get('/creator/:userId', authenticate, authorize('ADMIN', 'MANAGER', 'PHAR
 // GET /api/prescriptions/stats - Get prescription statistics
 router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM prescriptions');
-    const [[{ pending }]] = await query("SELECT COUNT(*) as pending FROM prescriptions WHERE status = 'PENDING'");
-    const [[{ dispensed }]] = await query("SELECT COUNT(*) as dispensed FROM prescriptions WHERE status = 'DISPENSED'");
+    const [totalResult] = await query('SELECT COUNT(*) as total FROM prescriptions');
+    const [pendingResult] = await query("SELECT COUNT(*) as pending FROM prescriptions WHERE status = 'PENDING'");
+    const [dispensedResult] = await query("SELECT COUNT(*) as dispensed FROM prescriptions WHERE status = 'DISPENSED'");
 
     res.json({
       success: true,
       data: { 
-        totalPrescriptions: parseInt(total), 
-        pendingPrescriptions: parseInt(pending), 
-        dispensedPrescriptions: parseInt(dispensed) 
+        totalPrescriptions: parseInt(getFirst(totalResult).total) || 0, 
+        pendingPrescriptions: parseInt(getFirst(pendingResult).pending) || 0, 
+        dispensedPrescriptions: parseInt(getFirst(dispensedResult).dispensed) || 0
       }
     });
   } catch (error) {
@@ -122,10 +118,8 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
     const offset = page * size;
 
     const [prescriptions] = await query(`
-      SELECT p.*, u.name as created_by_name, d.name as dispensed_by_name
+      SELECT p.*
       FROM prescriptions p
-      LEFT JOIN users u ON p.created_by = u.id
-      LEFT JOIN users d ON p.dispensed_by = d.id
       ORDER BY p.created_at DESC
       LIMIT $1 OFFSET $2
     `, [size, offset]);
@@ -133,22 +127,22 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
     // Get prescription items
     for (let prescription of prescriptions) {
       const [items] = await query(`
-        SELECT pi.*, m.name as medicine_name
+        SELECT pi.*
         FROM prescription_items pi
-        LEFT JOIN medicines m ON pi.medicine_id = m.id
         WHERE pi.prescription_id = $1
       `, [prescription.id]);
       prescription.items = items;
     }
 
-    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM prescriptions');
+    const [countResult] = await query('SELECT COUNT(*) as total FROM prescriptions');
+    const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
       data: {
         content: prescriptions,
-        totalElements: parseInt(total),
-        totalPages: Math.ceil(parseInt(total) / size),
+        totalElements: total,
+        totalPages: Math.ceil(total / size),
         page,
         size
       }
@@ -162,10 +156,8 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
 router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
     const [prescriptions] = await query(`
-      SELECT p.*, u.name as created_by_name, d.name as dispensed_by_name
+      SELECT p.*
       FROM prescriptions p
-      LEFT JOIN users u ON p.created_by = u.id
-      LEFT JOIN users d ON p.dispensed_by = d.id
       WHERE p.id = $1
     `, [req.params.id]);
 
@@ -174,9 +166,8 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CA
     }
 
     const [items] = await query(`
-      SELECT pi.*, m.name as medicine_name
+      SELECT pi.*
       FROM prescription_items pi
-      LEFT JOIN medicines m ON pi.medicine_id = m.id
       WHERE pi.prescription_id = $1
     `, [req.params.id]);
 
@@ -200,17 +191,17 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
     const id = uuidv4();
 
     await query(`
-      INSERT INTO prescriptions (id, patient_name, patient_phone, doctor_name, diagnosis, notes, status, created_by, created_at)
-      VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, CURRENT_TIMESTAMP)
-    `, [id, patient_name, patient_phone, doctor_name, diagnosis, notes, req.user.id]);
+      INSERT INTO prescriptions (id, patient_name, patient_phone, doctor_name, diagnosis, notes, status, created_by, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [id, patient_name, patient_phone || null, doctor_name || null, diagnosis || null, notes || null, req.user.id]);
 
     // Create prescription items
     for (const item of items) {
       const itemId = uuidv4();
       await query(`
-        INSERT INTO prescription_items (id, prescription_id, medicine_id, quantity, dosage, frequency, duration, instructions)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-      `, [itemId, id, item.medicine_id, item.quantity, item.dosage, item.frequency, item.duration, item.instructions]);
+        INSERT INTO prescription_items (id, prescription_id, medicine_id, medicine, quantity, dosage, frequency, duration, instructions)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+      `, [itemId, id, item.medicine_id, item.medicine || item.medicine_name || '', item.quantity, item.dosage || null, item.frequency || null, item.duration || null, item.instructions || null]);
     }
 
     res.status(201).json({
@@ -218,6 +209,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
       data: { id, patient_name, patient_phone, status: 'PENDING', items }
     });
   } catch (error) {
+    console.error('Create prescription error:', error);
     next(error);
   }
 });
@@ -240,9 +232,9 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
       for (const item of items) {
         const itemId = uuidv4();
         await query(`
-          INSERT INTO prescription_items (id, prescription_id, medicine_id, quantity, dosage, frequency, duration, instructions)
-          VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-        `, [itemId, req.params.id, item.medicine_id, item.quantity, item.dosage, item.frequency, item.duration, item.instructions]);
+          INSERT INTO prescription_items (id, prescription_id, medicine_id, medicine, quantity, dosage, frequency, duration, instructions)
+          VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        `, [itemId, req.params.id, item.medicine_id, item.medicine || item.medicine_name || '', item.quantity, item.dosage || null, item.frequency || null, item.duration || null, item.instructions || null]);
       }
     }
 
@@ -259,7 +251,7 @@ router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'),
   try {
     await query('DELETE FROM prescription_items WHERE prescription_id = $1', [req.params.id]);
     await query('DELETE FROM prescriptions WHERE id = $1', [req.params.id]);
-    res.json({ success: true });
+    res.json({ success: true, message: 'Prescription deleted successfully' });
   } catch (error) {
     next(error);
   }

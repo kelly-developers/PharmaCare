@@ -6,16 +6,26 @@ const { authenticate, authorize } = require('../middleware/auth');
 const router = express.Router();
 
 // GET /api/categories - Get all categories
-router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
+router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
     const [categories] = await query(`
-      SELECT c.*, 
-        (SELECT COUNT(*) FROM medicines m WHERE m.category_id = c.id) as medicine_count
+      SELECT c.id, c.name, c.description, c.created_at, c.updated_at,
+        (SELECT COUNT(*) FROM medicines m WHERE m.category = c.name) as medicine_count
       FROM categories c 
       ORDER BY c.name
     `);
 
-    res.json({ success: true, data: categories });
+    // Transform to camelCase for frontend
+    const transformedCategories = categories.map(c => ({
+      id: c.id,
+      name: c.name,
+      description: c.description,
+      medicineCount: parseInt(c.medicine_count) || 0,
+      createdAt: c.created_at,
+      updatedAt: c.updated_at
+    }));
+
+    res.json({ success: true, data: transformedCategories });
   } catch (error) {
     next(error);
   }
@@ -24,23 +34,28 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async
 // GET /api/categories/stats - Get category statistics
 router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [[{ totalcategories }]] = await query('SELECT COUNT(*) as totalCategories FROM categories');
+    const [countResult] = await query('SELECT COUNT(*) as total FROM categories');
+    const totalCategories = parseInt(countResult[0]?.total) || 0;
     
     const [categoryBreakdown] = await query(`
       SELECT c.id as "categoryId", c.name, 
-        (SELECT COUNT(*) FROM medicines m WHERE m.category_id = c.id) as "medicineCount"
+        (SELECT COUNT(*) FROM medicines m WHERE m.category = c.name) as "medicineCount"
       FROM categories c
       ORDER BY "medicineCount" DESC
     `);
 
-    const categoriesWithMedicines = categoryBreakdown.filter(c => parseInt(c.medicineCount) > 0).length;
+    const totalMedicines = categoryBreakdown.reduce((sum, c) => sum + parseInt(c.medicineCount || 0), 0);
 
     res.json({
       success: true,
       data: {
-        totalCategories: parseInt(totalcategories),
-        categoriesWithMedicines,
-        categoryBreakdown
+        totalCategories,
+        totalMedicines,
+        categoryBreakdown: categoryBreakdown.map(c => ({
+          categoryId: c.categoryId,
+          name: c.name,
+          medicineCount: parseInt(c.medicineCount) || 0
+        }))
       }
     });
   } catch (error) {
@@ -52,8 +67,8 @@ router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
 router.get('/name/:name', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
     const [categories] = await query(`
-      SELECT c.*, 
-        (SELECT COUNT(*) FROM medicines m WHERE m.category_id = c.id) as medicine_count
+      SELECT c.id, c.name, c.description, c.created_at, c.updated_at,
+        (SELECT COUNT(*) FROM medicines m WHERE m.category = c.name) as medicine_count
       FROM categories c 
       WHERE c.name = $1
     `, [req.params.name]);
@@ -62,7 +77,18 @@ router.get('/name/:name', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIS
       return res.status(404).json({ success: false, error: 'Category not found' });
     }
 
-    res.json({ success: true, data: categories[0] });
+    const c = categories[0];
+    res.json({ 
+      success: true, 
+      data: {
+        id: c.id,
+        name: c.name,
+        description: c.description,
+        medicineCount: parseInt(c.medicine_count) || 0,
+        createdAt: c.created_at,
+        updatedAt: c.updated_at
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -72,8 +98,8 @@ router.get('/name/:name', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIS
 router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
     const [categories] = await query(`
-      SELECT c.*, 
-        (SELECT COUNT(*) FROM medicines m WHERE m.category_id = c.id) as medicine_count
+      SELECT c.id, c.name, c.description, c.created_at, c.updated_at,
+        (SELECT COUNT(*) FROM medicines m WHERE m.category = c.name) as medicine_count
       FROM categories c 
       WHERE c.id = $1
     `, [req.params.id]);
@@ -82,7 +108,18 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
       return res.status(404).json({ success: false, error: 'Category not found' });
     }
 
-    res.json({ success: true, data: categories[0] });
+    const c = categories[0];
+    res.json({ 
+      success: true, 
+      data: {
+        id: c.id,
+        name: c.name,
+        description: c.description,
+        medicineCount: parseInt(c.medicine_count) || 0,
+        createdAt: c.created_at,
+        updatedAt: c.updated_at
+      }
+    });
   } catch (error) {
     next(error);
   }
@@ -93,22 +130,39 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
   try {
     const { name, description } = req.body;
 
-    if (!name) {
+    if (!name || !name.trim()) {
       return res.status(400).json({ success: false, error: 'Category name is required' });
+    }
+
+    // Check if category already exists
+    const [existing] = await query('SELECT id FROM categories WHERE LOWER(name) = LOWER($1)', [name.trim()]);
+    if (existing.length > 0) {
+      return res.status(409).json({ success: false, error: 'Category with this name already exists' });
     }
 
     const id = uuidv4();
 
     await query(
-      'INSERT INTO categories (id, name, description, created_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP)',
-      [id, name, description || '']
+      'INSERT INTO categories (id, name, description, created_at, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)',
+      [id, name.trim(), description || '']
     );
 
     res.status(201).json({
       success: true,
-      data: { id, name, description, medicine_count: 0, created_at: new Date() }
+      data: { 
+        id, 
+        name: name.trim(), 
+        description: description || '', 
+        medicineCount: 0, 
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      }
     });
   } catch (error) {
+    // Handle unique constraint violation
+    if (error.code === '23505') {
+      return res.status(409).json({ success: false, error: 'Category with this name already exists' });
+    }
     next(error);
   }
 });
@@ -118,15 +172,66 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
   try {
     const { name, description } = req.body;
 
+    if (!name || !name.trim()) {
+      return res.status(400).json({ success: false, error: 'Category name is required' });
+    }
+
+    // Check if category exists
+    const [existing] = await query('SELECT * FROM categories WHERE id = $1', [req.params.id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, error: 'Category not found' });
+    }
+
+    // Check if another category has the same name
+    const [duplicate] = await query(
+      'SELECT id FROM categories WHERE LOWER(name) = LOWER($1) AND id != $2', 
+      [name.trim(), req.params.id]
+    );
+    if (duplicate.length > 0) {
+      return res.status(409).json({ success: false, error: 'Another category with this name already exists' });
+    }
+
+    const oldName = existing[0].name;
+    const newName = name.trim();
+
+    // Update category
     await query(
       'UPDATE categories SET name = $1, description = $2, updated_at = CURRENT_TIMESTAMP WHERE id = $3',
-      [name, description, req.params.id]
+      [newName, description || '', req.params.id]
     );
 
-    const [categories] = await query('SELECT * FROM categories WHERE id = $1', [req.params.id]);
+    // Update medicines that use this category name
+    if (oldName !== newName) {
+      await query(
+        'UPDATE medicines SET category = $1 WHERE category = $2',
+        [newName, oldName]
+      );
+    }
 
-    res.json({ success: true, data: categories[0] });
+    // Get updated category
+    const [updated] = await query(`
+      SELECT c.id, c.name, c.description, c.created_at, c.updated_at,
+        (SELECT COUNT(*) FROM medicines m WHERE m.category = c.name) as medicine_count
+      FROM categories c 
+      WHERE c.id = $1
+    `, [req.params.id]);
+
+    const c = updated[0];
+    res.json({ 
+      success: true, 
+      data: {
+        id: c.id,
+        name: c.name,
+        description: c.description,
+        medicineCount: parseInt(c.medicine_count) || 0,
+        createdAt: c.created_at,
+        updatedAt: c.updated_at
+      }
+    });
   } catch (error) {
+    if (error.code === '23505') {
+      return res.status(409).json({ success: false, error: 'Category with this name already exists' });
+    }
     next(error);
   }
 });
@@ -134,21 +239,27 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
 // DELETE /api/categories/:id - Delete category
 router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
+    // Get category to check if it exists and get its name
+    const [existing] = await query('SELECT name FROM categories WHERE id = $1', [req.params.id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, error: 'Category not found' });
+    }
+
     // Check if category has medicines
-    const [[{ count }]] = await query(
-      'SELECT COUNT(*) as count FROM medicines WHERE category_id = $1',
-      [req.params.id]
+    const [medicines] = await query(
+      'SELECT COUNT(*) as count FROM medicines WHERE category = $1',
+      [existing[0].name]
     );
 
-    if (parseInt(count) > 0) {
+    if (parseInt(medicines[0]?.count) > 0) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Cannot delete category with associated medicines' 
+        error: `Cannot delete category with ${medicines[0].count} associated medicines. Please reassign or delete them first.`
       });
     }
 
     await query('DELETE FROM categories WHERE id = $1', [req.params.id]);
-    res.json({ success: true });
+    res.json({ success: true, message: 'Category deleted successfully' });
   } catch (error) {
     next(error);
   }

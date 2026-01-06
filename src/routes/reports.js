@@ -4,21 +4,25 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Helper to safely get first result
+const getFirst = (results) => results[0] || {};
+
 // GET /api/reports/dashboard - Get dashboard summary
 router.get('/dashboard', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
     // Today's sales
-    const [[salesData]] = await query(`
+    const [salesResult] = await query(`
       SELECT 
         COUNT(*) as transaction_count,
-        COALESCE(SUM(total_amount), 0) as total_sales,
+        COALESCE(SUM(total), 0) as total_sales,
         COALESCE(SUM(profit), 0) as total_profit
       FROM sales
       WHERE DATE(created_at) = CURRENT_DATE
     `);
+    const salesData = getFirst(salesResult);
 
     // Stock summary
-    const [[stockData]] = await query(`
+    const [stockResult] = await query(`
       SELECT 
         COUNT(*) as total_medicines,
         SUM(CASE WHEN stock_quantity <= reorder_level THEN 1 ELSE 0 END) as low_stock,
@@ -26,29 +30,40 @@ router.get('/dashboard', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST
         SUM(CASE WHEN expiry_date <= CURRENT_DATE + INTERVAL '90 days' THEN 1 ELSE 0 END) as expiring_soon
       FROM medicines
     `);
+    const stockData = getFirst(stockResult);
 
     // Pending prescriptions
-    const [[prescriptionData]] = await query(`
+    const [prescriptionResult] = await query(`
       SELECT COUNT(*) as pending FROM prescriptions WHERE status = 'PENDING'
     `);
+    const prescriptionData = getFirst(prescriptionResult);
 
     // Pending expenses
-    const [[expenseData]] = await query(`
+    const [expenseResult] = await query(`
       SELECT COUNT(*) as pending FROM expenses WHERE status = 'PENDING'
     `);
+    const expenseData = getFirst(expenseResult);
+
+    // Stock value (selling price)
+    const [stockValueResult] = await query(`
+      SELECT COALESCE(SUM(stock_quantity * unit_price), 0) as stock_value
+      FROM medicines
+    `);
+    const stockValue = parseFloat(getFirst(stockValueResult).stock_value) || 0;
 
     res.json({
       success: true,
       data: {
-        todaySales: parseFloat(salesData.total_sales),
-        todayTransactions: parseInt(salesData.transaction_count),
-        todayProfit: parseFloat(salesData.total_profit),
-        totalMedicines: parseInt(stockData.total_medicines),
-        lowStockItems: parseInt(stockData.low_stock || 0),
-        outOfStockItems: parseInt(stockData.out_of_stock || 0),
-        expiringSoon: parseInt(stockData.expiring_soon || 0),
-        pendingPrescriptions: parseInt(prescriptionData.pending),
-        pendingExpenses: parseInt(expenseData.pending)
+        todaySales: parseFloat(salesData.total_sales) || 0,
+        todayTransactions: parseInt(salesData.transaction_count) || 0,
+        todayProfit: parseFloat(salesData.total_profit) || 0,
+        totalMedicines: parseInt(stockData.total_medicines) || 0,
+        lowStockItems: parseInt(stockData.low_stock) || 0,
+        outOfStockItems: parseInt(stockData.out_of_stock) || 0,
+        expiringSoon: parseInt(stockData.expiring_soon) || 0,
+        pendingPrescriptions: parseInt(prescriptionData.pending) || 0,
+        pendingExpenses: parseInt(expenseData.pending) || 0,
+        stockValue
       }
     });
   } catch (error) {
@@ -69,32 +84,31 @@ router.get('/sales-summary', authenticate, authorize('ADMIN', 'MANAGER'), async 
       params.push(startDate, endDate);
     }
 
-    const [[summary]] = await query(`
+    const [summaryResult] = await query(`
       SELECT 
         COUNT(*) as total_transactions,
-        COALESCE(SUM(total_amount), 0) as total_sales,
+        COALESCE(SUM(total), 0) as total_sales,
         COALESCE(SUM(profit), 0) as total_profit,
-        COALESCE(AVG(total_amount), 0) as average_sale
+        COALESCE(AVG(total), 0) as average_sale
       FROM sales
       ${dateFilter}
     `, params);
+    const summary = getFirst(summaryResult);
 
     // Top selling medicines
-    const topMedicinesQuery = `
-      SELECT m.name, SUM(si.quantity) as total_sold, SUM(si.subtotal) as total_revenue
+    const [topMedicines] = await query(`
+      SELECT si.medicine_name as name, SUM(si.quantity) as total_sold, SUM(si.subtotal) as total_revenue
       FROM sale_items si
-      JOIN medicines m ON si.medicine_id = m.id
       JOIN sales s ON si.sale_id = s.id
       ${dateFilter ? dateFilter.replace('created_at', 's.created_at') : ''}
-      GROUP BY m.id, m.name
+      GROUP BY si.medicine_name
       ORDER BY total_sold DESC
       LIMIT 10
-    `;
-    const [topMedicines] = await query(topMedicinesQuery, params);
+    `, params);
 
     // Sales by payment method
     const [paymentBreakdown] = await query(`
-      SELECT payment_method, COUNT(*) as count, SUM(total_amount) as total
+      SELECT payment_method, COUNT(*) as count, SUM(total) as total
       FROM sales
       ${dateFilter}
       GROUP BY payment_method
@@ -104,10 +118,10 @@ router.get('/sales-summary', authenticate, authorize('ADMIN', 'MANAGER'), async 
       success: true,
       data: {
         summary: {
-          total_transactions: parseInt(summary.total_transactions),
-          total_sales: parseFloat(summary.total_sales),
-          total_profit: parseFloat(summary.total_profit),
-          average_sale: parseFloat(summary.average_sale)
+          total_transactions: parseInt(summary.total_transactions) || 0,
+          total_sales: parseFloat(summary.total_sales) || 0,
+          total_profit: parseFloat(summary.total_profit) || 0,
+          average_sale: parseFloat(summary.average_sale) || 0
         },
         topMedicines,
         paymentBreakdown
@@ -124,34 +138,32 @@ router.get('/stock-summary', authenticate, authorize('ADMIN', 'MANAGER'), async 
     // Stock by category
     const [categoryBreakdown] = await query(`
       SELECT 
-        c.name as category,
-        COUNT(m.id) as medicine_count,
-        COALESCE(SUM(m.stock_quantity), 0) as total_stock,
-        COALESCE(SUM(m.stock_quantity * m.cost_price), 0) as total_cost_value,
-        COALESCE(SUM(m.stock_quantity * m.unit_price), 0) as total_retail_value
-      FROM categories c
-      LEFT JOIN medicines m ON m.category_id = c.id
-      GROUP BY c.id, c.name
+        category,
+        COUNT(*) as medicine_count,
+        COALESCE(SUM(stock_quantity), 0) as total_stock,
+        COALESCE(SUM(stock_quantity * cost_price), 0) as total_cost_value,
+        COALESCE(SUM(stock_quantity * unit_price), 0) as total_retail_value
+      FROM medicines
+      WHERE category IS NOT NULL AND category != ''
+      GROUP BY category
       ORDER BY total_retail_value DESC
     `);
 
     // Low stock items
     const [lowStock] = await query(`
-      SELECT m.name, m.stock_quantity, m.reorder_level, c.name as category
-      FROM medicines m
-      LEFT JOIN categories c ON m.category_id = c.id
-      WHERE m.stock_quantity <= m.reorder_level
-      ORDER BY m.stock_quantity ASC
+      SELECT name, stock_quantity, reorder_level, category
+      FROM medicines
+      WHERE stock_quantity <= reorder_level
+      ORDER BY stock_quantity ASC
       LIMIT 20
     `);
 
     // Expiring soon
     const [expiring] = await query(`
-      SELECT m.name, m.stock_quantity, m.expiry_date, c.name as category
-      FROM medicines m
-      LEFT JOIN categories c ON m.category_id = c.id
-      WHERE m.expiry_date <= CURRENT_DATE + INTERVAL '90 days'
-      ORDER BY m.expiry_date ASC
+      SELECT name, stock_quantity, expiry_date, category
+      FROM medicines
+      WHERE expiry_date <= CURRENT_DATE + INTERVAL '90 days'
+      ORDER BY expiry_date ASC
       LIMIT 20
     `);
 
@@ -175,35 +187,34 @@ router.get('/balance-sheet', authenticate, authorize('ADMIN', 'MANAGER'), async 
     const date = asOfDate || new Date().toISOString().split('T')[0];
 
     // Assets - Inventory value
-    const [[inventoryValue]] = await query(`
+    const [inventoryResult] = await query(`
       SELECT COALESCE(SUM(stock_quantity * cost_price), 0) as value FROM medicines
     `);
+    const inventoryVal = parseFloat(getFirst(inventoryResult).value) || 0;
 
-    // Assets - Cash from sales (simplified)
-    const [[cashFromSales]] = await query(`
-      SELECT COALESCE(SUM(total_amount), 0) as value 
+    // Assets - Cash from sales
+    const [cashResult] = await query(`
+      SELECT COALESCE(SUM(total), 0) as value 
       FROM sales 
       WHERE DATE(created_at) <= $1
     `, [date]);
+    const cashVal = parseFloat(getFirst(cashResult).value) || 0;
 
     // Liabilities - Pending purchase orders
-    const [[pendingPurchases]] = await query(`
-      SELECT COALESCE(SUM(total_amount), 0) as value 
+    const [purchaseResult] = await query(`
+      SELECT COALESCE(SUM(total), 0) as value 
       FROM purchase_orders 
       WHERE status IN ('APPROVED', 'SUBMITTED') AND DATE(created_at) <= $1
     `, [date]);
+    const purchasesVal = parseFloat(getFirst(purchaseResult).value) || 0;
 
     // Expenses
-    const [[totalExpenses]] = await query(`
+    const [expenseResult] = await query(`
       SELECT COALESCE(SUM(amount), 0) as value 
       FROM expenses 
-      WHERE status = 'APPROVED' AND DATE(expense_date) <= $1
+      WHERE status = 'APPROVED' AND DATE(date) <= $1
     `, [date]);
-
-    const inventoryVal = parseFloat(inventoryValue.value);
-    const cashVal = parseFloat(cashFromSales.value);
-    const purchasesVal = parseFloat(pendingPurchases.value);
-    const expensesVal = parseFloat(totalExpenses.value);
+    const expensesVal = parseFloat(getFirst(expenseResult).value) || 0;
 
     res.json({
       success: true,
@@ -235,35 +246,34 @@ router.get('/income-statement', authenticate, authorize('ADMIN', 'MANAGER'), asy
     const end = endDate || new Date().toISOString().split('T')[0];
 
     // Revenue
-    const [[revenue]] = await query(`
+    const [revenueResult] = await query(`
       SELECT 
-        COALESCE(SUM(total_amount), 0) as gross_sales,
+        COALESCE(SUM(subtotal), 0) as gross_sales,
         COALESCE(SUM(discount), 0) as discounts,
-        COALESCE(SUM(total_amount - discount), 0) as net_sales
+        COALESCE(SUM(total), 0) as net_sales
       FROM sales
       WHERE DATE(created_at) BETWEEN $1 AND $2
     `, [start, end]);
+    const revenue = getFirst(revenueResult);
 
     // Cost of goods sold
-    const [[cogs]] = await query(`
-      SELECT COALESCE(SUM(si.quantity * m.cost_price), 0) as value
-      FROM sale_items si
-      JOIN medicines m ON si.medicine_id = m.id
-      JOIN sales s ON si.sale_id = s.id
-      WHERE DATE(s.created_at) BETWEEN $1 AND $2
+    const [cogsResult] = await query(`
+      SELECT COALESCE(SUM(cost_of_goods_sold), 0) as value
+      FROM sales
+      WHERE DATE(created_at) BETWEEN $1 AND $2
     `, [start, end]);
+    const cogsValue = parseFloat(getFirst(cogsResult).value) || 0;
 
     // Operating expenses by category
     const [expenseBreakdown] = await query(`
       SELECT category, COALESCE(SUM(amount), 0) as total
       FROM expenses
-      WHERE status = 'APPROVED' AND DATE(expense_date) BETWEEN $1 AND $2
+      WHERE status = 'APPROVED' AND DATE(date) BETWEEN $1 AND $2
       GROUP BY category
     `, [start, end]);
 
     const totalExpenses = expenseBreakdown.reduce((sum, e) => sum + parseFloat(e.total), 0);
-    const netSales = parseFloat(revenue.net_sales);
-    const cogsValue = parseFloat(cogs.value);
+    const netSales = parseFloat(revenue.net_sales) || 0;
     const grossProfit = netSales - cogsValue;
     const netIncome = grossProfit - totalExpenses;
 
@@ -272,8 +282,8 @@ router.get('/income-statement', authenticate, authorize('ADMIN', 'MANAGER'), asy
       data: {
         period: { startDate: start, endDate: end },
         revenue: {
-          grossSales: parseFloat(revenue.gross_sales),
-          discounts: parseFloat(revenue.discounts),
+          grossSales: parseFloat(revenue.gross_sales) || 0,
+          discounts: parseFloat(revenue.discounts) || 0,
           netSales
         },
         costOfGoodsSold: cogsValue,
@@ -293,23 +303,24 @@ router.get('/income-statement', authenticate, authorize('ADMIN', 'MANAGER'), asy
 // GET /api/reports/inventory-value - Get inventory value
 router.get('/inventory-value', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [[totals]] = await query(`
+    const [totalsResult] = await query(`
       SELECT 
         COALESCE(SUM(stock_quantity * cost_price), 0) as cost_value,
         COALESCE(SUM(stock_quantity * unit_price), 0) as retail_value,
         COALESCE(SUM(stock_quantity), 0) as total_units
       FROM medicines
     `);
+    const totals = getFirst(totalsResult);
 
-    const costValue = parseFloat(totals.cost_value);
-    const retailValue = parseFloat(totals.retail_value);
+    const costValue = parseFloat(totals.cost_value) || 0;
+    const retailValue = parseFloat(totals.retail_value) || 0;
 
     res.json({
       success: true,
       data: {
         costValue,
         retailValue,
-        totalUnits: parseInt(totals.total_units),
+        totalUnits: parseInt(totals.total_units) || 0,
         potentialProfit: retailValue - costValue
       }
     });
@@ -323,14 +334,14 @@ router.get('/stock-breakdown', authenticate, authorize('ADMIN', 'MANAGER'), asyn
   try {
     const [breakdown] = await query(`
       SELECT 
-        c.name as category,
-        COUNT(m.id) as medicine_count,
-        COALESCE(SUM(m.stock_quantity), 0) as total_stock,
-        COALESCE(SUM(m.stock_quantity * m.cost_price), 0) as cost_value,
-        COALESCE(SUM(m.stock_quantity * m.unit_price), 0) as retail_value
-      FROM categories c
-      LEFT JOIN medicines m ON m.category_id = c.id
-      GROUP BY c.id, c.name
+        category,
+        COUNT(*) as medicine_count,
+        COALESCE(SUM(stock_quantity), 0) as total_stock,
+        COALESCE(SUM(stock_quantity * cost_price), 0) as cost_value,
+        COALESCE(SUM(stock_quantity * unit_price), 0) as retail_value
+      FROM medicines
+      WHERE category IS NOT NULL AND category != ''
+      GROUP BY category
       ORDER BY retail_value DESC
     `);
 
@@ -345,13 +356,12 @@ router.get('/inventory-breakdown', authenticate, authorize('ADMIN', 'MANAGER'), 
   try {
     const [breakdown] = await query(`
       SELECT 
-        m.id, m.name, m.stock_quantity, m.cost_price, m.unit_price,
-        (m.stock_quantity * m.cost_price) as cost_value,
-        (m.stock_quantity * m.unit_price) as retail_value,
-        c.name as category
-      FROM medicines m
-      LEFT JOIN categories c ON m.category_id = c.id
-      WHERE m.stock_quantity > 0
+        id, name, stock_quantity, cost_price, unit_price,
+        (stock_quantity * cost_price) as cost_value,
+        (stock_quantity * unit_price) as retail_value,
+        category
+      FROM medicines
+      WHERE stock_quantity > 0
       ORDER BY retail_value DESC
     `);
 
@@ -366,14 +376,13 @@ router.get('/medicine-values', authenticate, authorize('ADMIN', 'MANAGER', 'PHAR
   try {
     const [medicines] = await query(`
       SELECT 
-        m.id, m.name, m.stock_quantity, m.cost_price, m.unit_price,
-        (m.stock_quantity * m.cost_price) as cost_value,
-        (m.stock_quantity * m.unit_price) as retail_value,
-        (m.unit_price - m.cost_price) as profit_margin,
-        c.name as category
-      FROM medicines m
-      LEFT JOIN categories c ON m.category_id = c.id
-      ORDER BY m.name
+        id, name, stock_quantity, cost_price, unit_price,
+        (stock_quantity * cost_price) as cost_value,
+        (stock_quantity * unit_price) as retail_value,
+        (unit_price - cost_price) as profit_margin,
+        category
+      FROM medicines
+      ORDER BY name
     `);
 
     res.json({ success: true, data: medicines });
@@ -382,36 +391,37 @@ router.get('/medicine-values', authenticate, authorize('ADMIN', 'MANAGER', 'PHAR
   }
 });
 
-// Profit report endpoints
 // GET /api/reports/profit/monthly/:yearMonth - Get monthly profit report
-router.get('/profit/monthly/:yearMonth', async (req, res, next) => {
+router.get('/profit/monthly/:yearMonth', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const [year, month] = req.params.yearMonth.split('-');
     const startDate = `${year}-${month}-01`;
     const endDate = `${year}-${month}-31`;
 
-    const [[salesData]] = await query(`
+    const [salesResult] = await query(`
       SELECT 
-        COALESCE(SUM(total_amount), 0) as total_sales,
+        COALESCE(SUM(total), 0) as total_sales,
         COALESCE(SUM(profit), 0) as gross_profit
       FROM sales
       WHERE DATE(created_at) BETWEEN $1 AND $2
     `, [startDate, endDate]);
+    const salesData = getFirst(salesResult);
 
-    const [[expenseData]] = await query(`
+    const [expenseResult] = await query(`
       SELECT COALESCE(SUM(amount), 0) as total_expenses
       FROM expenses
-      WHERE status = 'APPROVED' AND DATE(expense_date) BETWEEN $1 AND $2
+      WHERE status = 'APPROVED' AND DATE(date) BETWEEN $1 AND $2
     `, [startDate, endDate]);
+    const expenseData = getFirst(expenseResult);
 
-    const grossProfit = parseFloat(salesData.gross_profit);
-    const totalExpenses = parseFloat(expenseData.total_expenses);
+    const grossProfit = parseFloat(salesData.gross_profit) || 0;
+    const totalExpenses = parseFloat(expenseData.total_expenses) || 0;
 
     res.json({
       success: true,
       data: {
         yearMonth: req.params.yearMonth,
-        totalSales: parseFloat(salesData.total_sales),
+        totalSales: parseFloat(salesData.total_sales) || 0,
         grossProfit,
         totalExpenses,
         netProfit: grossProfit - totalExpenses
@@ -423,33 +433,35 @@ router.get('/profit/monthly/:yearMonth', async (req, res, next) => {
 });
 
 // GET /api/reports/profit/daily - Get daily profit
-router.get('/profit/daily', async (req, res, next) => {
+router.get('/profit/daily', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { date } = req.query;
     const targetDate = date || new Date().toISOString().split('T')[0];
 
-    const [[salesData]] = await query(`
+    const [salesResult] = await query(`
       SELECT 
-        COALESCE(SUM(total_amount), 0) as total_sales,
+        COALESCE(SUM(total), 0) as total_sales,
         COALESCE(SUM(profit), 0) as gross_profit
       FROM sales
       WHERE DATE(created_at) = $1
     `, [targetDate]);
+    const salesData = getFirst(salesResult);
 
-    const [[expenseData]] = await query(`
+    const [expenseResult] = await query(`
       SELECT COALESCE(SUM(amount), 0) as total_expenses
       FROM expenses
-      WHERE status = 'APPROVED' AND DATE(expense_date) = $1
+      WHERE status = 'APPROVED' AND DATE(date) = $1
     `, [targetDate]);
+    const expenseData = getFirst(expenseResult);
 
-    const grossProfit = parseFloat(salesData.gross_profit);
-    const totalExpenses = parseFloat(expenseData.total_expenses);
+    const grossProfit = parseFloat(salesData.gross_profit) || 0;
+    const totalExpenses = parseFloat(expenseData.total_expenses) || 0;
 
     res.json({
       success: true,
       data: {
         date: targetDate,
-        totalSales: parseFloat(salesData.total_sales),
+        totalSales: parseFloat(salesData.total_sales) || 0,
         grossProfit,
         totalExpenses,
         netProfit: grossProfit - totalExpenses
@@ -461,47 +473,106 @@ router.get('/profit/daily', async (req, res, next) => {
 });
 
 // GET /api/reports/profit/range - Get profit for date range
-router.get('/profit/range', async (req, res, next) => {
+router.get('/profit/range', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
 
-    const [[result]] = await query(`
+    const [result] = await query(`
       SELECT COALESCE(SUM(profit), 0) as total_profit
       FROM sales
       WHERE DATE(created_at) BETWEEN $1 AND $2
     `, [startDate, endDate]);
 
-    res.json({ success: true, data: parseFloat(result.total_profit) });
+    res.json({ success: true, data: parseFloat(getFirst(result).total_profit) || 0 });
   } catch (error) {
     next(error);
   }
 });
 
 // GET /api/reports/profit/summary - Get profit summary
-router.get('/profit/summary', async (req, res, next) => {
+router.get('/profit/summary', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const today = new Date().toISOString().split('T')[0];
     const startOfMonth = new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
     const startOfYear = new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
 
-    const [[dailyProfit]] = await query(`
+    const [dailyResult] = await query(`
       SELECT COALESCE(SUM(profit), 0) as value FROM sales WHERE DATE(created_at) = $1
     `, [today]);
 
-    const [[monthlyProfit]] = await query(`
+    const [monthlyResult] = await query(`
       SELECT COALESCE(SUM(profit), 0) as value FROM sales WHERE DATE(created_at) >= $1
     `, [startOfMonth]);
 
-    const [[yearlyProfit]] = await query(`
+    const [yearlyResult] = await query(`
       SELECT COALESCE(SUM(profit), 0) as value FROM sales WHERE DATE(created_at) >= $1
     `, [startOfYear]);
 
     res.json({
       success: true,
       data: {
-        daily: parseFloat(dailyProfit.value),
-        monthly: parseFloat(monthlyProfit.value),
-        yearly: parseFloat(yearlyProfit.value)
+        daily: parseFloat(getFirst(dailyResult).value) || 0,
+        monthly: parseFloat(getFirst(monthlyResult).value) || 0,
+        yearly: parseFloat(getFirst(yearlyResult).value) || 0
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/reports/annual-summary - Get annual summary
+router.get('/annual-summary', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { year } = req.query;
+    const targetYear = year || new Date().getFullYear();
+
+    // Monthly breakdown
+    const [monthlyBreakdown] = await query(`
+      SELECT 
+        EXTRACT(MONTH FROM created_at) as month,
+        COALESCE(SUM(total), 0) as revenue,
+        COALESCE(SUM(profit), 0) as profit,
+        COUNT(*) as transactions
+      FROM sales
+      WHERE EXTRACT(YEAR FROM created_at) = $1
+      GROUP BY EXTRACT(MONTH FROM created_at)
+      ORDER BY month
+    `, [targetYear]);
+
+    // Annual totals
+    const [annualResult] = await query(`
+      SELECT 
+        COALESCE(SUM(total), 0) as total_revenue,
+        COALESCE(SUM(profit), 0) as total_profit,
+        COUNT(*) as total_transactions
+      FROM sales
+      WHERE EXTRACT(YEAR FROM created_at) = $1
+    `, [targetYear]);
+    const annualTotals = getFirst(annualResult);
+
+    // Annual expenses
+    const [expenseResult] = await query(`
+      SELECT COALESCE(SUM(amount), 0) as total
+      FROM expenses
+      WHERE status = 'APPROVED' AND EXTRACT(YEAR FROM date) = $1
+    `, [targetYear]);
+
+    res.json({
+      success: true,
+      data: {
+        year: parseInt(targetYear),
+        totalRevenue: parseFloat(annualTotals.total_revenue) || 0,
+        totalProfit: parseFloat(annualTotals.total_profit) || 0,
+        totalExpenses: parseFloat(getFirst(expenseResult).total) || 0,
+        netProfit: (parseFloat(annualTotals.total_profit) || 0) - (parseFloat(getFirst(expenseResult).total) || 0),
+        totalTransactions: parseInt(annualTotals.total_transactions) || 0,
+        monthlyBreakdown: monthlyBreakdown.map(m => ({
+          month: parseInt(m.month),
+          revenue: parseFloat(m.revenue) || 0,
+          profit: parseFloat(m.profit) || 0,
+          transactions: parseInt(m.transactions) || 0
+        }))
       }
     });
   } catch (error) {

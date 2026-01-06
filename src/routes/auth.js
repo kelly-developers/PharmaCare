@@ -177,7 +177,7 @@ router.post('/register', async (req, res, next) => {
 });
 
 // GET /api/auth/me - Get current user profile
-router.get('/me', authenticate, async (req, res) => {
+router.get('/me', authenticate, async (req, res, next) => {
   try {
     const [users] = await query(
       'SELECT id, username, email, name, role, phone, active, created_at, last_login FROM users WHERE id = $1',

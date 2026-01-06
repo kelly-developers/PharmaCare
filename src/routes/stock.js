@@ -5,21 +5,22 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Helper to safely get first result
+const getFirst = (results) => results[0] || {};
+
 // GET /api/stock/health - Health check
 router.get('/health', async (req, res) => {
   res.json({ success: true, status: 'healthy', timestamp: new Date().toISOString() });
 });
 
-// GET /api/stock/recent - Get recent stock movements (must be before /movements)
+// GET /api/stock/recent - Get recent stock movements
 router.get('/recent', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
 
     const [movements] = await query(`
-      SELECT sm.*, m.name as medicine_name, u.name as created_by_name
+      SELECT sm.*
       FROM stock_movements sm
-      LEFT JOIN medicines m ON sm.medicine_id = m.id
-      LEFT JOIN users u ON sm.created_by = u.id
       ORDER BY sm.created_at DESC
       LIMIT $1
     `, [limit]);
@@ -40,14 +41,14 @@ router.get('/monthly', authenticate, authorize('ADMIN', 'MANAGER'), async (req, 
     const startDate = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
     const endDate = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
 
-    const [[additions]] = await query(`
+    const [additionsResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
       WHERE type IN ('ADDITION', 'PURCHASE')
       AND created_at BETWEEN $1 AND $2
     `, [startDate, endDate]);
 
-    const [[sales]] = await query(`
+    const [salesResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
       WHERE type = 'SALE'
@@ -59,9 +60,9 @@ router.get('/monthly', authenticate, authorize('ADMIN', 'MANAGER'), async (req, 
       data: {
         year: parseInt(currentYear),
         month: parseInt(currentMonth),
-        totalAdditions: parseInt(additions.total),
-        totalSales: parseInt(sales.total),
-        netChange: parseInt(additions.total) - parseInt(sales.total)
+        totalAdditions: parseInt(getFirst(additionsResult).total) || 0,
+        totalSales: parseInt(getFirst(salesResult).total) || 0,
+        netChange: (parseInt(getFirst(additionsResult).total) || 0) - (parseInt(getFirst(salesResult).total) || 0)
       }
     });
   } catch (error) {
@@ -82,34 +83,38 @@ router.get('/summary', authenticate, authorize('ADMIN', 'MANAGER'), async (req, 
       params.push(startDate, endDate);
     }
 
-    const [[additions]] = await query(`
+    const [additionsResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
       WHERE type IN ('ADDITION', 'PURCHASE')
       ${dateFilter}
     `, params);
 
-    const [[sales]] = await query(`
+    const [salesResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
       WHERE type = 'SALE'
       ${dateFilter}
     `, params);
 
-    const [[losses]] = await query(`
+    const [lossesResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
       WHERE type = 'LOSS'
       ${dateFilter}
     `, params);
 
+    const additions = parseInt(getFirst(additionsResult).total) || 0;
+    const sales = parseInt(getFirst(salesResult).total) || 0;
+    const losses = parseInt(getFirst(lossesResult).total) || 0;
+
     res.json({
       success: true,
       data: {
-        totalAdditions: parseInt(additions.total),
-        totalSales: parseInt(sales.total),
-        totalLosses: parseInt(losses.total),
-        netChange: parseInt(additions.total) - parseInt(sales.total) - parseInt(losses.total)
+        totalAdditions: additions,
+        totalSales: sales,
+        totalLosses: losses,
+        netChange: additions - sales - losses
       }
     });
   } catch (error) {
@@ -117,18 +122,18 @@ router.get('/summary', authenticate, authorize('ADMIN', 'MANAGER'), async (req, 
   }
 });
 
-// GET /api/stock/breakdown - Get stock breakdown
+// GET /api/stock/breakdown - Get stock breakdown by category
 router.get('/breakdown', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const [breakdown] = await query(`
       SELECT 
-        c.name as category,
-        COUNT(m.id) as medicine_count,
-        COALESCE(SUM(m.stock_quantity), 0) as total_stock,
-        COALESCE(SUM(m.stock_quantity * m.cost_price), 0) as total_value
-      FROM categories c
-      LEFT JOIN medicines m ON m.category_id = c.id
-      GROUP BY c.id, c.name
+        category,
+        COUNT(*) as medicine_count,
+        COALESCE(SUM(stock_quantity), 0) as total_stock,
+        COALESCE(SUM(stock_quantity * cost_price), 0) as total_value
+      FROM medicines
+      WHERE category IS NOT NULL AND category != ''
+      GROUP BY category
       ORDER BY total_value DESC
     `);
 
@@ -146,22 +151,21 @@ router.get('/movements', authenticate, authorize('ADMIN', 'MANAGER'), async (req
     const offset = page * size;
 
     const [movements] = await query(`
-      SELECT sm.*, m.name as medicine_name, u.name as created_by_name
+      SELECT sm.*
       FROM stock_movements sm
-      LEFT JOIN medicines m ON sm.medicine_id = m.id
-      LEFT JOIN users u ON sm.created_by = u.id
       ORDER BY sm.created_at DESC
       LIMIT $1 OFFSET $2
     `, [size, offset]);
 
-    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM stock_movements');
+    const [countResult] = await query('SELECT COUNT(*) as total FROM stock_movements');
+    const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
       data: {
         content: movements,
-        totalElements: parseInt(total),
-        totalPages: Math.ceil(parseInt(total) / size),
+        totalElements: total,
+        totalPages: Math.ceil(total / size),
         page,
         size
       }
@@ -175,10 +179,8 @@ router.get('/movements', authenticate, authorize('ADMIN', 'MANAGER'), async (req
 router.get('/movements/reference/:referenceId', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const [movements] = await query(`
-      SELECT sm.*, m.name as medicine_name, u.name as created_by_name
+      SELECT sm.*
       FROM stock_movements sm
-      LEFT JOIN medicines m ON sm.medicine_id = m.id
-      LEFT JOIN users u ON sm.created_by = u.id
       WHERE sm.reference_id = $1
       ORDER BY sm.created_at DESC
     `, [req.params.referenceId]);
@@ -218,26 +220,25 @@ router.get('/movements/medicine/:medicineId/filtered', authenticate, authorize('
     }
 
     const [movements] = await query(`
-      SELECT sm.*, m.name as medicine_name, u.name as created_by_name
+      SELECT sm.*
       FROM stock_movements sm
-      LEFT JOIN medicines m ON sm.medicine_id = m.id
-      LEFT JOIN users u ON sm.created_by = u.id
       WHERE ${whereClause}
       ORDER BY sm.created_at DESC
       LIMIT $${paramIndex + 1} OFFSET $${paramIndex + 2}
     `, [...params, size, offset]);
 
-    const [[{ total }]] = await query(
+    const [countResult] = await query(
       `SELECT COUNT(*) as total FROM stock_movements sm WHERE ${whereClause}`,
       params
     );
+    const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
       data: {
         content: movements,
-        totalElements: parseInt(total),
-        totalPages: Math.ceil(parseInt(total) / size),
+        totalElements: total,
+        totalPages: Math.ceil(total / size),
         page,
         size
       }
@@ -255,26 +256,25 @@ router.get('/movements/medicine/:medicineId', authenticate, authorize('ADMIN', '
     const offset = page * size;
 
     const [movements] = await query(`
-      SELECT sm.*, m.name as medicine_name, u.name as created_by_name
+      SELECT sm.*
       FROM stock_movements sm
-      LEFT JOIN medicines m ON sm.medicine_id = m.id
-      LEFT JOIN users u ON sm.created_by = u.id
       WHERE sm.medicine_id = $1
       ORDER BY sm.created_at DESC
       LIMIT $2 OFFSET $3
     `, [req.params.medicineId, size, offset]);
 
-    const [[{ total }]] = await query(
+    const [countResult] = await query(
       'SELECT COUNT(*) as total FROM stock_movements WHERE medicine_id = $1',
       [req.params.medicineId]
     );
+    const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
       data: {
         content: movements,
-        totalElements: parseInt(total),
-        totalPages: Math.ceil(parseInt(total) / size),
+        totalElements: total,
+        totalPages: Math.ceil(total / size),
         page,
         size
       }
@@ -297,7 +297,7 @@ router.get('/net-movement/:medicineId', authenticate, authorize('ADMIN', 'MANAGE
       params.push(startDate, endDate);
     }
 
-    const [[result]] = await query(`
+    const [result] = await query(`
       SELECT 
         COALESCE(SUM(CASE WHEN type IN ('ADDITION', 'PURCHASE') THEN quantity ELSE 0 END), 0) as additions,
         COALESCE(SUM(CASE WHEN type = 'SALE' THEN quantity ELSE 0 END), 0) as sales,
@@ -307,13 +307,18 @@ router.get('/net-movement/:medicineId', authenticate, authorize('ADMIN', 'MANAGE
       ${dateFilter}
     `, params);
 
+    const data = getFirst(result);
+    const additions = parseInt(data.additions) || 0;
+    const sales = parseInt(data.sales) || 0;
+    const losses = parseInt(data.losses) || 0;
+
     res.json({
       success: true,
       data: {
-        additions: parseInt(result.additions),
-        sales: parseInt(result.sales),
-        losses: parseInt(result.losses),
-        netMovement: parseInt(result.additions) - parseInt(result.sales) - parseInt(result.losses)
+        additions,
+        sales,
+        losses,
+        netMovement: additions - sales - losses
       }
     });
   } catch (error) {
@@ -331,32 +336,47 @@ router.post('/loss', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
     }
 
     // Check available stock
-    const [medicines] = await query('SELECT stock_quantity FROM medicines WHERE id = $1', [medicine_id]);
+    const [medicines] = await query('SELECT * FROM medicines WHERE id = $1', [medicine_id]);
     
     if (medicines.length === 0) {
       return res.status(404).json({ success: false, error: 'Medicine not found' });
     }
 
-    if (medicines[0].stock_quantity < quantity) {
+    const medicine = medicines[0];
+
+    if (medicine.stock_quantity < quantity) {
       return res.status(400).json({ success: false, error: 'Insufficient stock for loss recording' });
     }
 
+    const previousStock = medicine.stock_quantity;
+    const newStock = previousStock - quantity;
+
+    // Get user name
+    const [userResult] = await query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
+    const user = getFirst(userResult);
+
     // Update medicine stock
     await query(
-      'UPDATE medicines SET stock_quantity = stock_quantity - $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [quantity, medicine_id]
+      'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [newStock, medicine_id]
     );
 
     // Record stock movement
     const id = uuidv4();
     await query(`
-      INSERT INTO stock_movements (id, medicine_id, type, quantity, notes, created_by, created_at)
-      VALUES ($1, $2, 'LOSS', $3, $4, $5, CURRENT_TIMESTAMP)
-    `, [id, medicine_id, quantity, `${reason || 'Stock loss'}: ${notes || ''}`, req.user.id]);
+      INSERT INTO stock_movements (
+        id, medicine_id, medicine_name, type, quantity, reason, notes, 
+        created_by, performed_by_name, performed_by_role, previous_stock, new_stock, created_at
+      )
+      VALUES ($1, $2, $3, 'LOSS', $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+    `, [
+      id, medicine_id, medicine.name, quantity, reason || 'Stock loss', notes || null,
+      req.user.id, user.name || 'Unknown', user.role || 'UNKNOWN', previousStock, newStock
+    ]);
 
     res.json({
       success: true,
-      data: { id, medicine_id, type: 'LOSS', quantity, reason, notes }
+      data: { id, medicine_id, type: 'LOSS', quantity, reason, notes, previous_stock: previousStock, new_stock: newStock }
     });
   } catch (error) {
     next(error);
@@ -373,14 +393,19 @@ router.post('/adjustment', authenticate, authorize('ADMIN', 'MANAGER'), async (r
     }
 
     // Get current stock
-    const [medicines] = await query('SELECT stock_quantity FROM medicines WHERE id = $1', [medicine_id]);
+    const [medicines] = await query('SELECT * FROM medicines WHERE id = $1', [medicine_id]);
     
     if (medicines.length === 0) {
       return res.status(404).json({ success: false, error: 'Medicine not found' });
     }
 
-    const currentStock = medicines[0].stock_quantity;
-    const adjustment = quantity - currentStock;
+    const medicine = medicines[0];
+    const previousStock = medicine.stock_quantity;
+    const adjustment = quantity - previousStock;
+
+    // Get user name
+    const [userResult] = await query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
+    const user = getFirst(userResult);
 
     // Update medicine stock
     await query(
@@ -391,13 +416,19 @@ router.post('/adjustment', authenticate, authorize('ADMIN', 'MANAGER'), async (r
     // Record stock movement
     const id = uuidv4();
     await query(`
-      INSERT INTO stock_movements (id, medicine_id, type, quantity, notes, created_by, created_at)
-      VALUES ($1, $2, 'ADJUSTMENT', $3, $4, $5, CURRENT_TIMESTAMP)
-    `, [id, medicine_id, adjustment, `${reason || 'Stock adjustment'}: ${notes || ''}`, req.user.id]);
+      INSERT INTO stock_movements (
+        id, medicine_id, medicine_name, type, quantity, reason, notes, 
+        created_by, performed_by_name, performed_by_role, previous_stock, new_stock, created_at
+      )
+      VALUES ($1, $2, $3, 'ADJUSTMENT', $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+    `, [
+      id, medicine_id, medicine.name, adjustment, reason || 'Stock adjustment', notes || null,
+      req.user.id, user.name || 'Unknown', user.role || 'UNKNOWN', previousStock, quantity
+    ]);
 
     res.json({
       success: true,
-      data: { id, medicine_id, type: 'ADJUSTMENT', previousQuantity: currentStock, newQuantity: quantity, adjustment }
+      data: { id, medicine_id, type: 'ADJUSTMENT', previousQuantity: previousStock, newQuantity: quantity, adjustment }
     });
   } catch (error) {
     next(error);
@@ -419,9 +450,9 @@ router.delete('/movements/:id', authenticate, authorize('ADMIN'), async (req, re
     // Reverse the stock change
     let stockChange = 0;
     if (movement.type === 'ADDITION' || movement.type === 'PURCHASE') {
-      stockChange = -movement.quantity; // Remove added stock
+      stockChange = -movement.quantity;
     } else if (movement.type === 'SALE' || movement.type === 'LOSS') {
-      stockChange = movement.quantity; // Add back sold/lost stock
+      stockChange = movement.quantity;
     }
 
     await query(
@@ -431,7 +462,7 @@ router.delete('/movements/:id', authenticate, authorize('ADMIN'), async (req, re
 
     await query('DELETE FROM stock_movements WHERE id = $1', [req.params.id]);
 
-    res.json({ success: true });
+    res.json({ success: true, message: 'Stock movement deleted and reversed' });
   } catch (error) {
     next(error);
   }

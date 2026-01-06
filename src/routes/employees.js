@@ -5,14 +5,16 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
+// Helper to safely get first result
+const getFirst = (results) => results[0] || {};
+
 // GET /api/employees/active - Get active employees (must be before /:id)
 router.get('/active', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const [employees] = await query(`
-      SELECT e.*, u.username, u.email as user_email
+      SELECT e.*
       FROM employees e
-      LEFT JOIN users u ON e.user_id = u.id
-      WHERE e.active = true
+      WHERE e.is_active = true OR e.active = true
       ORDER BY e.name
     `);
 
@@ -25,12 +27,15 @@ router.get('/active', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
 // GET /api/employees/stats - Get employee statistics
 router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM employees');
-    const [[{ active }]] = await query('SELECT COUNT(*) as active FROM employees WHERE active = true');
+    const [totalResult] = await query('SELECT COUNT(*) as total FROM employees');
+    const [activeResult] = await query('SELECT COUNT(*) as active FROM employees WHERE is_active = true OR active = true');
 
     res.json({
       success: true,
-      data: { totalEmployees: parseInt(total), activeEmployees: parseInt(active) }
+      data: { 
+        totalEmployees: parseInt(getFirst(totalResult).total) || 0, 
+        activeEmployees: parseInt(getFirst(activeResult).active) || 0 
+      }
     });
   } catch (error) {
     next(error);
@@ -41,9 +46,8 @@ router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
 router.get('/user/:userId', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const [employees] = await query(`
-      SELECT e.*, u.username, u.email as user_email
+      SELECT e.*
       FROM employees e
-      LEFT JOIN users u ON e.user_id = u.id
       WHERE e.user_id = $1
     `, [req.params.userId]);
 
@@ -61,28 +65,29 @@ router.get('/user/:userId', authenticate, authorize('ADMIN', 'MANAGER'), async (
 router.post('/payroll', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { 
-      employee_id, pay_period, basic_salary, allowances, 
-      deductions, net_salary, notes 
+      employee_id, pay_period, month, basic_salary, allowances, 
+      deductions, net_salary, payment_method, payment_date, notes 
     } = req.body;
 
-    if (!employee_id || !pay_period) {
-      return res.status(400).json({ success: false, error: 'Employee and pay period are required' });
+    if (!employee_id || (!pay_period && !month)) {
+      return res.status(400).json({ success: false, error: 'Employee and pay period/month are required' });
     }
 
     const id = uuidv4();
 
     await query(`
       INSERT INTO payroll (
-        id, employee_id, pay_period, basic_salary, allowances, 
-        deductions, net_salary, status, notes, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, CURRENT_TIMESTAMP)
-    `, [id, employee_id, pay_period, basic_salary, allowances || 0, deductions || 0, net_salary, notes]);
+        id, employee_id, pay_period, month, basic_salary, allowances, 
+        deductions, net_salary, payment_method, payment_date, status, notes, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 'PENDING', $11, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [id, employee_id, pay_period || month, month || pay_period, basic_salary || 0, allowances || 0, deductions || 0, net_salary || 0, payment_method || null, payment_date || null, notes || null]);
 
     res.status(201).json({
       success: true,
-      data: { id, employee_id, pay_period, basic_salary, net_salary, status: 'PENDING' }
+      data: { id, employee_id, pay_period: pay_period || month, basic_salary, net_salary, status: 'PENDING' }
     });
   } catch (error) {
+    console.error('Create payroll error:', error);
     next(error);
   }
 });
@@ -121,21 +126,21 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, ne
     const offset = page * size;
 
     const [employees] = await query(`
-      SELECT e.*, u.username, u.email as user_email, u.role as user_role
+      SELECT e.*
       FROM employees e
-      LEFT JOIN users u ON e.user_id = u.id
       ORDER BY e.name
       LIMIT $1 OFFSET $2
     `, [size, offset]);
 
-    const [[{ total }]] = await query('SELECT COUNT(*) as total FROM employees');
+    const [countResult] = await query('SELECT COUNT(*) as total FROM employees');
+    const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
       data: {
         content: employees,
-        totalElements: parseInt(total),
-        totalPages: Math.ceil(parseInt(total) / size),
+        totalElements: total,
+        totalPages: Math.ceil(total / size),
         page,
         size
       }
@@ -149,9 +154,8 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, ne
 router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const [employees] = await query(`
-      SELECT e.*, u.username, u.email as user_email
+      SELECT e.*
       FROM employees e
-      LEFT JOIN users u ON e.user_id = u.id
       WHERE e.id = $1
     `, [req.params.id]);
 
@@ -170,10 +174,10 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, n
   try {
     const { 
       user_id, name, email, phone, department, position, 
-      hire_date, salary, bank_account, bank_name, tax_id, address 
+      hire_date, salary, bank_account, bank_name, tax_id, kra_pin, nhif_number, nssf_number, address 
     } = req.body;
 
-    if (!name) {
+    if (!name || !name.trim()) {
       return res.status(400).json({ success: false, error: 'Employee name is required' });
     }
 
@@ -183,15 +187,17 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, n
     await query(`
       INSERT INTO employees (
         id, employee_id, user_id, name, email, phone, department, position,
-        hire_date, salary, bank_account, bank_name, tax_id, address, active, created_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, true, CURRENT_TIMESTAMP)
-    `, [id, employee_id, user_id, name, email, phone, department, position, hire_date, salary, bank_account, bank_name, tax_id, address]);
+        hire_date, salary, bank_account, bank_name, tax_id, kra_pin, nhif_number, nssf_number, address, 
+        active, is_active, created_at, updated_at
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, true, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [id, employee_id, user_id || null, name.trim(), email || null, phone || null, department || null, position || null, hire_date || null, salary || null, bank_account || null, bank_name || null, tax_id || null, kra_pin || null, nhif_number || null, nssf_number || null, address || null]);
 
     res.status(201).json({
       success: true,
-      data: { id, employee_id, name, email, department, position, active: true }
+      data: { id, employee_id, name: name.trim(), email, department, position, active: true, is_active: true }
     });
   } catch (error) {
+    console.error('Create employee error:', error);
     next(error);
   }
 });
@@ -201,17 +207,22 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res,
   try {
     const { 
       name, email, phone, department, position, 
-      salary, bank_account, bank_name, tax_id, address 
+      salary, bank_account, bank_name, tax_id, kra_pin, nhif_number, nssf_number, address 
     } = req.body;
 
     await query(`
       UPDATE employees SET
         name = $1, email = $2, phone = $3, department = $4, position = $5,
-        salary = $6, bank_account = $7, bank_name = $8, tax_id = $9, address = $10, updated_at = CURRENT_TIMESTAMP
-      WHERE id = $11
-    `, [name, email, phone, department, position, salary, bank_account, bank_name, tax_id, address, req.params.id]);
+        salary = $6, bank_account = $7, bank_name = $8, tax_id = $9, kra_pin = $10, 
+        nhif_number = $11, nssf_number = $12, address = $13, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $14
+    `, [name, email, phone, department, position, salary, bank_account, bank_name, tax_id, kra_pin, nhif_number, nssf_number, address, req.params.id]);
 
     const [employees] = await query('SELECT * FROM employees WHERE id = $1', [req.params.id]);
+
+    if (employees.length === 0) {
+      return res.status(404).json({ success: false, error: 'Employee not found' });
+    }
 
     res.json({ success: true, data: employees[0] });
   } catch (error) {
@@ -222,8 +233,8 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res,
 // DELETE /api/employees/:id - Deactivate employee
 router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    await query('UPDATE employees SET active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
-    res.json({ success: true });
+    await query('UPDATE employees SET active = false, is_active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
+    res.json({ success: true, message: 'Employee deactivated successfully' });
   } catch (error) {
     next(error);
   }
@@ -232,7 +243,7 @@ router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
 // PATCH /api/employees/:id/activate - Activate employee
 router.patch('/:id/activate', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    await query('UPDATE employees SET active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
+    await query('UPDATE employees SET active = true, is_active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
 
     const [employees] = await query('SELECT * FROM employees WHERE id = $1', [req.params.id]);
 
@@ -250,25 +261,25 @@ router.get('/:id/payroll', authenticate, authorize('ADMIN', 'MANAGER'), async (r
     const offset = page * size;
 
     const [payroll] = await query(`
-      SELECT p.*, e.name as employee_name
+      SELECT p.*
       FROM payroll p
-      LEFT JOIN employees e ON p.employee_id = e.id
       WHERE p.employee_id = $1
       ORDER BY p.pay_period DESC
       LIMIT $2 OFFSET $3
     `, [req.params.id, size, offset]);
 
-    const [[{ total }]] = await query(
+    const [countResult] = await query(
       'SELECT COUNT(*) as total FROM payroll WHERE employee_id = $1',
       [req.params.id]
     );
+    const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
       data: {
         content: payroll,
-        totalElements: parseInt(total),
-        totalPages: Math.ceil(parseInt(total) / size),
+        totalElements: total,
+        totalPages: Math.ceil(total / size),
         page,
         size
       }
