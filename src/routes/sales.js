@@ -24,6 +24,8 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
     const { items, payment_method, customer_name, customer_phone, discount, notes } = req.body;
 
     console.log('🚀 Creating sale with items:', JSON.stringify(items, null, 2));
+    console.log('🚀 Payment method received:', payment_method, 'Type:', typeof payment_method);
+    console.log('🚀 Customer phone received:', customer_phone, 'Type:', typeof customer_phone);
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, error: 'Sale items are required' });
@@ -120,6 +122,17 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
 
     console.log('👤 Cashier:', cashierName, 'ID:', req.user.id);
 
+    // FIXED: Ensure payment_method is safe before calling toUpperCase()
+    const safePaymentMethod = (payment_method || 'CASH').toUpperCase();
+    const safeCustomerPhone = customer_phone || ''; // Convert undefined to empty string
+    const safeCustomerName = customer_name || 'Walk-in';
+
+    console.log('✅ Safe values:', {
+      paymentMethod: safePaymentMethod,
+      customerPhone: safeCustomerPhone,
+      customerName: safeCustomerName
+    });
+
     // Insert sale record - FIXED: Ensure all required fields
     await client.query(`
       INSERT INTO sales (
@@ -135,9 +148,9 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
       discountAmount,
       finalAmount,
       finalProfit,
-      payment_method || 'CASH', 
-      customer_name || null, 
-      customer_phone || null, 
+      safePaymentMethod, // Use safe value
+      safeCustomerName, 
+      safeCustomerPhone, 
       notes || null
     ]);
 
@@ -266,9 +279,9 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
         discount: discountAmount,
         final_amount: finalAmount,
         profit: finalProfit,
-        payment_method: payment_method || 'CASH',
-        customer_name: customer_name || null,
-        customer_phone: customer_phone || null,
+        payment_method: safePaymentMethod,
+        customer_name: safeCustomerName,
+        customer_phone: safeCustomerPhone,
         notes: notes || null,
         created_at: createdSale.created_at,
         items: createdSale.items || []
