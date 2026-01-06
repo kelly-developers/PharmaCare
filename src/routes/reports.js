@@ -209,11 +209,11 @@ router.get('/balance-sheet', authenticate, authorize('ADMIN', 'MANAGER'), async 
     `, [date]);
     const purchasesVal = parseFloat(getFirst(purchaseResult).value) || 0;
 
-    // Expenses
+    // Expenses - use expense_date column
     const [expenseResult] = await query(`
       SELECT COALESCE(SUM(amount), 0) as value 
       FROM expenses 
-      WHERE status = 'APPROVED' AND DATE(date) <= $1
+      WHERE status = 'APPROVED' AND DATE(expense_date) <= $1
     `, [date]);
     const expensesVal = parseFloat(getFirst(expenseResult).value) || 0;
 
@@ -270,7 +270,7 @@ router.get('/income-statement', authenticate, authorize('ADMIN', 'MANAGER'), asy
     const [expenseBreakdown] = await query(`
       SELECT category, COALESCE(SUM(amount), 0) as total
       FROM expenses
-      WHERE status = 'APPROVED' AND DATE(date) BETWEEN $1 AND $2
+      WHERE status = 'APPROVED' AND DATE(expense_date) BETWEEN $1 AND $2
       GROUP BY category
     `, [start, end]);
 
@@ -412,7 +412,7 @@ router.get('/profit/monthly/:yearMonth', authenticate, authorize('ADMIN', 'MANAG
     const [expenseResult] = await query(`
       SELECT COALESCE(SUM(amount), 0) as total_expenses
       FROM expenses
-      WHERE status = 'APPROVED' AND DATE(date) BETWEEN $1 AND $2
+      WHERE status = 'APPROVED' AND DATE(expense_date) BETWEEN $1 AND $2
     `, [startDate, endDate]);
     const expenseData = getFirst(expenseResult);
 
@@ -452,7 +452,7 @@ router.get('/profit/daily', authenticate, authorize('ADMIN', 'MANAGER'), async (
     const [expenseResult] = await query(`
       SELECT COALESCE(SUM(amount), 0) as total_expenses
       FROM expenses
-      WHERE status = 'APPROVED' AND DATE(date) = $1
+      WHERE status = 'APPROVED' AND DATE(expense_date) = $1
     `, [targetDate]);
     const expenseData = getFirst(expenseResult);
 
@@ -557,7 +557,7 @@ router.get('/annual-summary', authenticate, authorize('ADMIN', 'MANAGER'), async
     const [expenseResult] = await query(`
       SELECT COALESCE(SUM(amount), 0) as total
       FROM expenses
-      WHERE status = 'APPROVED' AND EXTRACT(YEAR FROM date) = $1
+      WHERE status = 'APPROVED' AND EXTRACT(YEAR FROM expense_date) = $1
     `, [targetYear]);
 
     res.json({

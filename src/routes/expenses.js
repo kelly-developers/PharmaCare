@@ -32,7 +32,7 @@ router.get('/period-total', authenticate, authorize('ADMIN', 'MANAGER'), async (
     const [result] = await query(`
       SELECT COALESCE(SUM(amount), 0) as "totalExpenses"
       FROM expenses
-      WHERE status = 'APPROVED' AND DATE(date) BETWEEN $1 AND $2
+      WHERE status = 'APPROVED' AND DATE(expense_date) BETWEEN $1 AND $2
     `, [startDate, endDate]);
 
     res.json({ success: true, data: { totalExpenses: parseFloat(getFirst(result).totalExpenses) || 0 } });
