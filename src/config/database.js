@@ -4,7 +4,6 @@ const { Pool } = require('pg');
 const parseJdbcUrl = (jdbcUrl) => {
   if (!jdbcUrl) return null;
   
-  // Extract from jdbc:postgresql://host:port/database?params
   const match = jdbcUrl.match(/jdbc:postgresql:\/\/([^:\/]+):?(\d*)?\/([^?]+)(\?.*)?/);
   if (match) {
     const params = new URLSearchParams(match[4]?.substring(1) || '');
@@ -62,51 +61,64 @@ const pool = new Pool({
 
 // Set schema on each connection
 pool.on('connect', async (client) => {
-  await client.query(`SET search_path TO ${config.schema}, public`);
+  try {
+    await client.query(`SET search_path TO ${config.schema}, public`);
+    console.log(`✅ Database connected to schema: ${config.schema}`);
+  } catch (error) {
+    console.error('Failed to set schema:', error);
+  }
 });
 
-// Test connection
-pool.connect()
-  .then(client => {
-    console.log('✅ Database connected successfully');
-    console.log(`   Host: ${config.host}`);
-    console.log(`   Database: ${config.database}`);
-    console.log(`   Schema: ${config.schema}`);
-    client.release();
-  })
-  .catch(err => {
-    console.error('❌ Database connection failed:', err.message);
-  });
-
-// Query wrapper to match mysql2 format
+// Query wrapper with better error handling
 const query = async (text, params = []) => {
-  // Convert MySQL placeholders (?) to PostgreSQL ($1, $2, etc.)
-  let paramIndex = 0;
-  const pgText = text.replace(/\?/g, () => `$${++paramIndex}`);
-  
-  // Convert MySQL functions to PostgreSQL
-  const convertedText = pgText
-    .replace(/NOW\(\)/gi, 'CURRENT_TIMESTAMP')
-    .replace(/CURDATE\(\)/gi, 'CURRENT_DATE')
-    .replace(/DATE_ADD\(([^,]+),\s*INTERVAL\s+(\?|\$\d+)\s+DAY\)/gi, '($1 + INTERVAL \'1 day\' * $2)')
-    .replace(/DATE\(([^)]+)\)/gi, 'DATE($1)')
-    .replace(/IFNULL/gi, 'COALESCE')
-    .replace(/LIMIT\s+(\?|\$\d+)\s+OFFSET\s+(\?|\$\d+)/gi, 'LIMIT $1 OFFSET $2');
-  
+  let client;
   try {
-    const result = await pool.query(convertedText, params);
+    client = await pool.connect();
+    
+    // Convert MySQL placeholders (?) to PostgreSQL ($1, $2, etc.)
+    let paramIndex = 0;
+    const pgText = text.replace(/\?/g, () => `$${++paramIndex}`);
+    
+    // Convert MySQL functions to PostgreSQL
+    const convertedText = pgText
+      .replace(/NOW\(\)/gi, 'CURRENT_TIMESTAMP')
+      .replace(/CURDATE\(\)/gi, 'CURRENT_DATE')
+      .replace(/DATE_ADD\(([^,]+),\s*INTERVAL\s+(\?|\$\d+)\s+DAY\)/gi, '($1 + INTERVAL \'1 day\' * $2)')
+      .replace(/DATE\(([^)]+)\)/gi, 'DATE($1)')
+      .replace(/IFNULL/gi, 'COALESCE')
+      .replace(/LIMIT\s+(\?|\$\d+)\s+OFFSET\s+(\?|\$\d+)/gi, 'LIMIT $1 OFFSET $2');
+    
+    console.log('📝 Executing query:', convertedText.substring(0, 200) + '...');
+    console.log('📝 With params:', params);
+    
+    const result = await client.query(convertedText, params);
     
     // Return in mysql2 format: [[rows], [fields]]
     return [result.rows, result.fields];
   } catch (error) {
-    console.error('Query Error:', {
-      originalText: text,
-      convertedText: convertedText,
+    console.error('❌ Query Error:', {
+      originalText: text.substring(0, 200),
       params: params,
-      error: error.message
+      error: error.message,
+      stack: error.stack
     });
     throw error;
+  } finally {
+    if (client) {
+      client.release();
+    }
   }
 };
 
-module.exports = { query, pool, config };
+// Direct query method for transactions
+const queryDirect = async (client, text, params = []) => {
+  return client.query(text, params);
+};
+
+module.exports = { 
+  query, 
+  queryDirect,
+  pool, 
+  config,
+  getConnectionConfig 
+};
