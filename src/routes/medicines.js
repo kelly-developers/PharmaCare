@@ -31,7 +31,17 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
     }
 
     const [medicines] = await query(`
-      SELECT *
+      SELECT 
+        id, name, generic_name, category, description, manufacturer,
+        unit_price, cost_price, stock_quantity, reorder_level,
+        expiry_date, batch_number, requires_prescription, product_type,
+        units, image_url, created_at, updated_at,
+        (stock_quantity * cost_price) as stock_value,
+        CASE 
+          WHEN stock_quantity = 0 THEN 'Out of Stock'
+          WHEN stock_quantity <= reorder_level THEN 'Low Stock'
+          ELSE 'In Stock'
+        END as status
       FROM medicines
       WHERE ${whereClause}
       ORDER BY name
@@ -187,6 +197,21 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
       return res.status(400).json({ 
         success: false, 
         error: 'Category is required' 
+      });
+    }
+
+    // Validate numeric fields
+    if (cost_price !== undefined && (isNaN(cost_price) || cost_price < 0)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Cost price must be a non-negative number' 
+      });
+    }
+
+    if (stock_quantity !== undefined && (isNaN(stock_quantity) || stock_quantity < 0)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Stock quantity must be a non-negative number' 
       });
     }
 
@@ -373,16 +398,45 @@ router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER'), async
     const previousStock = medicine.stock_quantity;
     const newStock = previousStock + parseInt(quantity);
 
-    // Update medicine stock
+    // Update medicine stock and optionally update cost price and batch info
+    const updateFields = [];
+    const updateValues = [];
+    let paramIndex = 1;
+
+    updateFields.push(`stock_quantity = $${paramIndex++}`);
+    updateValues.push(newStock);
+
+    updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
+    
+    if (cost_price) {
+      updateFields.push(`cost_price = $${paramIndex++}`);
+      updateValues.push(parseFloat(cost_price));
+    }
+    
+    if (batch_number) {
+      updateFields.push(`batch_number = $${paramIndex++}`);
+      updateValues.push(batch_number);
+    }
+    
+    if (expiry_date) {
+      updateFields.push(`expiry_date = $${paramIndex++}`);
+      updateValues.push(expiry_date);
+    }
+
+    updateValues.push(req.params.id);
+
     await query(
-      'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [newStock, req.params.id]
+      `UPDATE medicines SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`,
+      updateValues
     );
 
     // Record stock movement
     const movementId = uuidv4();
     await query(`
-      INSERT INTO stock_movements (id, medicine_id, type, quantity, batch_number, notes, created_by, created_at, medicine_name, previous_stock, new_stock)
+      INSERT INTO stock_movements (
+        id, medicine_id, type, quantity, batch_number, notes, created_by, 
+        created_at, medicine_name, previous_stock, new_stock
+      )
       VALUES ($1, $2, 'ADDITION', $3, $4, $5, $6, CURRENT_TIMESTAMP, $7, $8, $9)
     `, [movementId, req.params.id, quantity, batch_number || null, notes || null, req.user.id, medicine.name, previousStock, newStock]);
 
@@ -392,7 +446,10 @@ router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER'), async
         medicine_id: req.params.id,
         quantity_added: quantity,
         previous_stock: previousStock,
-        new_stock: newStock
+        new_stock: newStock,
+        batch_number: batch_number || medicine.batch_number,
+        expiry_date: expiry_date || medicine.expiry_date,
+        cost_price: cost_price || medicine.cost_price
       }
     });
   } catch (error) {
@@ -472,6 +529,57 @@ router.patch('/:id/stock', authenticate, authorize('ADMIN', 'MANAGER'), async (r
       success: true, 
       data: medicines[0],
       message: 'Stock updated successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/medicines/:id/update-batch - Update batch information
+router.post('/:id/update-batch', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { batch_number, expiry_date } = req.body;
+
+    const [medicines] = await query('SELECT * FROM medicines WHERE id = $1', [req.params.id]);
+    if (medicines.length === 0) {
+      return res.status(404).json({ success: false, error: 'Medicine not found' });
+    }
+
+    const updateFields = [];
+    const updateValues = [];
+    let paramIndex = 1;
+
+    if (batch_number !== undefined) {
+      updateFields.push(`batch_number = $${paramIndex++}`);
+      updateValues.push(batch_number || null);
+    }
+
+    if (expiry_date !== undefined) {
+      updateFields.push(`expiry_date = $${paramIndex++}`);
+      updateValues.push(expiry_date || null);
+    }
+
+    if (updateFields.length === 0) {
+      return res.status(400).json({ success: false, error: 'No fields to update' });
+    }
+
+    updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
+    updateValues.push(req.params.id);
+
+    await query(
+      `UPDATE medicines SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`,
+      updateValues
+    );
+
+    const [updatedMedicine] = await query(
+      'SELECT * FROM medicines WHERE id = $1',
+      [req.params.id]
+    );
+
+    res.json({ 
+      success: true, 
+      data: updatedMedicine[0],
+      message: 'Batch information updated successfully'
     });
   } catch (error) {
     next(error);

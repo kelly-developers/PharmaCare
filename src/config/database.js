@@ -93,10 +93,20 @@ const query = async (text, params = []) => {
     .replace(/IFNULL/gi, 'COALESCE')
     .replace(/LIMIT\s+(\?|\$\d+)\s+OFFSET\s+(\?|\$\d+)/gi, 'LIMIT $1 OFFSET $2');
   
-  const result = await pool.query(convertedText, params);
-  
-  // Return in mysql2 format: [[rows], [fields]]
-  return [result.rows, result.fields];
+  try {
+    const result = await pool.query(convertedText, params);
+    
+    // Return in mysql2 format: [[rows], [fields]]
+    return [result.rows, result.fields];
+  } catch (error) {
+    console.error('Query Error:', {
+      originalText: text,
+      convertedText: convertedText,
+      params: params,
+      error: error.message
+    });
+    throw error;
+  }
 };
 
 module.exports = { query, pool, config };

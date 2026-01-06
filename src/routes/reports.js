@@ -10,11 +10,11 @@ const getFirst = (results) => results[0] || {};
 // GET /api/reports/dashboard - Get dashboard summary
 router.get('/dashboard', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
-    // Today's sales
+    // Today's sales - FIXED: using final_amount instead of total
     const [salesResult] = await query(`
       SELECT 
         COUNT(*) as transaction_count,
-        COALESCE(SUM(total), 0) as total_sales,
+        COALESCE(SUM(final_amount), 0) as total_sales,
         COALESCE(SUM(profit), 0) as total_profit
       FROM sales
       WHERE DATE(created_at) = CURRENT_DATE
@@ -84,12 +84,13 @@ router.get('/sales-summary', authenticate, authorize('ADMIN', 'MANAGER'), async 
       params.push(startDate, endDate);
     }
 
+    // FIXED: Using final_amount instead of total
     const [summaryResult] = await query(`
       SELECT 
         COUNT(*) as total_transactions,
-        COALESCE(SUM(total), 0) as total_sales,
+        COALESCE(SUM(final_amount), 0) as total_sales,
         COALESCE(SUM(profit), 0) as total_profit,
-        COALESCE(AVG(total), 0) as average_sale
+        COALESCE(AVG(final_amount), 0) as average_sale
       FROM sales
       ${dateFilter}
     `, params);
@@ -108,7 +109,7 @@ router.get('/sales-summary', authenticate, authorize('ADMIN', 'MANAGER'), async 
 
     // Sales by payment method
     const [paymentBreakdown] = await query(`
-      SELECT payment_method, COUNT(*) as count, SUM(total) as total
+      SELECT payment_method, COUNT(*) as count, SUM(final_amount) as total
       FROM sales
       ${dateFilter}
       GROUP BY payment_method
@@ -151,7 +152,7 @@ router.get('/stock-summary', authenticate, authorize('ADMIN', 'MANAGER'), async 
 
     // Low stock items
     const [lowStock] = await query(`
-      SELECT name, stock_quantity, reorder_level, category
+      SELECT name, stock_quantity, reorder_level, category, batch_number, expiry_date
       FROM medicines
       WHERE stock_quantity <= reorder_level
       ORDER BY stock_quantity ASC
@@ -160,7 +161,7 @@ router.get('/stock-summary', authenticate, authorize('ADMIN', 'MANAGER'), async 
 
     // Expiring soon
     const [expiring] = await query(`
-      SELECT name, stock_quantity, expiry_date, category
+      SELECT name, stock_quantity, expiry_date, category, batch_number
       FROM medicines
       WHERE expiry_date <= CURRENT_DATE + INTERVAL '90 days'
       ORDER BY expiry_date ASC
@@ -194,7 +195,7 @@ router.get('/balance-sheet', authenticate, authorize('ADMIN', 'MANAGER'), async 
 
     // Assets - Cash from sales
     const [cashResult] = await query(`
-      SELECT COALESCE(SUM(total), 0) as value 
+      SELECT COALESCE(SUM(final_amount), 0) as value 
       FROM sales 
       WHERE DATE(created_at) <= $1
     `, [date]);
@@ -245,22 +246,23 @@ router.get('/income-statement', authenticate, authorize('ADMIN', 'MANAGER'), asy
     const start = startDate || new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
     const end = endDate || new Date().toISOString().split('T')[0];
 
-    // Revenue
+    // Revenue - FIXED: using subtotal for gross sales (from sale_items)
     const [revenueResult] = await query(`
       SELECT 
-        COALESCE(SUM(subtotal), 0) as gross_sales,
+        COALESCE(SUM(total_amount), 0) as gross_sales,
         COALESCE(SUM(discount), 0) as discounts,
-        COALESCE(SUM(total), 0) as net_sales
+        COALESCE(SUM(final_amount), 0) as net_sales
       FROM sales
       WHERE DATE(created_at) BETWEEN $1 AND $2
     `, [start, end]);
     const revenue = getFirst(revenueResult);
 
-    // Cost of goods sold
+    // Cost of goods sold - FIXED: need to calculate from sale_items
     const [cogsResult] = await query(`
-      SELECT COALESCE(SUM(cost_of_goods_sold), 0) as value
-      FROM sales
-      WHERE DATE(created_at) BETWEEN $1 AND $2
+      SELECT COALESCE(SUM(si.quantity * si.cost_price), 0) as value
+      FROM sale_items si
+      JOIN sales s ON si.sale_id = s.id
+      WHERE DATE(s.created_at) BETWEEN $1 AND $2
     `, [start, end]);
     const cogsValue = parseFloat(getFirst(cogsResult).value) || 0;
 
@@ -356,7 +358,7 @@ router.get('/inventory-breakdown', authenticate, authorize('ADMIN', 'MANAGER'), 
   try {
     const [breakdown] = await query(`
       SELECT 
-        id, name, stock_quantity, cost_price, unit_price,
+        id, name, stock_quantity, cost_price, unit_price, batch_number, expiry_date,
         (stock_quantity * cost_price) as cost_value,
         (stock_quantity * unit_price) as retail_value,
         category
@@ -376,7 +378,7 @@ router.get('/medicine-values', authenticate, authorize('ADMIN', 'MANAGER', 'PHAR
   try {
     const [medicines] = await query(`
       SELECT 
-        id, name, stock_quantity, cost_price, unit_price,
+        id, name, stock_quantity, cost_price, unit_price, batch_number, expiry_date,
         (stock_quantity * cost_price) as cost_value,
         (stock_quantity * unit_price) as retail_value,
         (unit_price - cost_price) as profit_margin,
@@ -400,7 +402,7 @@ router.get('/profit/monthly/:yearMonth', authenticate, authorize('ADMIN', 'MANAG
 
     const [salesResult] = await query(`
       SELECT 
-        COALESCE(SUM(total), 0) as total_sales,
+        COALESCE(SUM(final_amount), 0) as total_sales,
         COALESCE(SUM(profit), 0) as gross_profit
       FROM sales
       WHERE DATE(created_at) BETWEEN $1 AND $2
@@ -440,7 +442,7 @@ router.get('/profit/daily', authenticate, authorize('ADMIN', 'MANAGER'), async (
 
     const [salesResult] = await query(`
       SELECT 
-        COALESCE(SUM(total), 0) as total_sales,
+        COALESCE(SUM(final_amount), 0) as total_sales,
         COALESCE(SUM(profit), 0) as gross_profit
       FROM sales
       WHERE DATE(created_at) = $1
@@ -531,7 +533,7 @@ router.get('/annual-summary', authenticate, authorize('ADMIN', 'MANAGER'), async
     const [monthlyBreakdown] = await query(`
       SELECT 
         EXTRACT(MONTH FROM created_at) as month,
-        COALESCE(SUM(total), 0) as revenue,
+        COALESCE(SUM(final_amount), 0) as revenue,
         COALESCE(SUM(profit), 0) as profit,
         COUNT(*) as transactions
       FROM sales
@@ -543,7 +545,7 @@ router.get('/annual-summary', authenticate, authorize('ADMIN', 'MANAGER'), async
     // Annual totals
     const [annualResult] = await query(`
       SELECT 
-        COALESCE(SUM(total), 0) as total_revenue,
+        COALESCE(SUM(final_amount), 0) as total_revenue,
         COALESCE(SUM(profit), 0) as total_profit,
         COUNT(*) as total_transactions
       FROM sales
@@ -575,6 +577,29 @@ router.get('/annual-summary', authenticate, authorize('ADMIN', 'MANAGER'), async
         }))
       }
     });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/reports/medicine-details - Get all medicine details including batch, expiry, etc.
+router.get('/medicine-details', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
+  try {
+    const [medicines] = await query(`
+      SELECT 
+        id, name, category, batch_number, expiry_date, 
+        stock_quantity, cost_price, unit_price,
+        (stock_quantity * cost_price) as stock_value,
+        CASE 
+          WHEN stock_quantity = 0 THEN 'Out of Stock'
+          WHEN stock_quantity <= reorder_level THEN 'Low Stock'
+          ELSE 'In Stock'
+        END as status
+      FROM medicines
+      ORDER BY name
+    `);
+
+    res.json({ success: true, data: medicines });
   } catch (error) {
     next(error);
   }
