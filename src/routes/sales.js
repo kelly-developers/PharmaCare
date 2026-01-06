@@ -376,25 +376,35 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
         [item.stock_deduction, item.medicine_id]
       );
 
-      // Record stock movement
-      const movementId = uuidv4();
-      await query(`
-        INSERT INTO stock_movements (
-          id, medicine_id, medicine_name, type, quantity, reference_id, 
-          created_by, performed_by_name, performed_by_role, previous_stock, new_stock, created_at
-        )
-        VALUES ($1, $2, $3, 'SALE', $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
-      `, [
-        movementId, 
-        item.medicine_id, 
-        item.medicine_name, 
-        item.stock_deduction, 
-        saleId, 
-        req.user.id, 
-        cashierName, 
-        req.user.role,
-        0, 0 // These would need to be calculated properly for full audit
-      ]);
+// Record stock movement - FIXED VERSION
+const movementId = uuidv4();
+// Get the stock AFTER the deduction to correctly calculate new_stock
+const [updatedMedicine] = await query(
+    'SELECT stock_quantity FROM medicines WHERE id = $1',
+    [item.medicine_id]
+);
+const newStock = parseInt(updatedMedicine[0]?.stock_quantity) || 0;
+const previousStock = newStock + item.stock_deduction; // Calculate what it was before
+
+await query(`
+    INSERT INTO stock_movements (
+        id, medicine_id, medicine_name, type, quantity, reference_id,
+        created_by, performed_by_name, performed_by_role,
+        previous_stock, new_stock, created_at
+    )
+    VALUES ($1, $2, $3, 'SALE', $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+`, [
+    movementId,
+    item.medicine_id,
+    item.medicine_name,
+    -Math.abs(item.stock_deduction), // Negative quantity for deduction
+    saleId,
+    req.user.id,
+    cashierName,
+    req.user.role,
+    previousStock, // Correctly calculated previous stock
+    newStock       // Correctly fetched new stock
+]);
     }
 
     res.status(201).json({
