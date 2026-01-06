@@ -544,7 +544,7 @@ router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) =
         [newStock, item.medicine_id]
       );
       
-      // Record reversal movement
+      // Record reversal    movement
       const movementId = uuidv4();
       await client.query(`
         INSERT INTO stock_movements (
