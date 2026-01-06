@@ -13,6 +13,9 @@ const generateTransactionId = () => {
   return `TXN-${datePart}-${randomPart}`;
 };
 
+// Helper to safely get first result
+const getFirst = (results) => results[0] || {};
+
 // GET /api/sales - Get all sales (paginated)
 router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
@@ -38,7 +41,7 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, ne
     }
 
     const [countResult] = await query('SELECT COUNT(*) as total FROM sales');
-    const total = parseInt(countResult[0]?.total) || 0;
+    const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
@@ -61,13 +64,13 @@ router.get('/today', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), asy
     const [summaryResult] = await query(`
       SELECT 
         COUNT(*) as transaction_count,
-        COALESCE(SUM(total), 0) as total_sales,
+        COALESCE(SUM(final_amount), 0) as total_sales,
         COALESCE(SUM(profit), 0) as total_profit
       FROM sales
       WHERE DATE(created_at) = CURRENT_DATE
     `);
 
-    const summary = summaryResult[0] || { transaction_count: 0, total_sales: 0, total_profit: 0 };
+    const summary = getFirst(summaryResult);
 
     res.json({
       success: true,
@@ -128,7 +131,7 @@ router.get('/cashier/:cashierId', authenticate, authorize('ADMIN', 'MANAGER'), a
       'SELECT COUNT(*) as total FROM sales WHERE cashier_id = $1',
       [req.params.cashierId]
     );
-    const total = parseInt(countResult[0]?.total) || 0;
+    const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
@@ -161,21 +164,21 @@ router.get('/report', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
     const [summaryResult] = await query(`
       SELECT 
         COUNT(*) as transaction_count,
-        COALESCE(SUM(total), 0) as total_sales,
+        COALESCE(SUM(final_amount), 0) as total_sales,
         COALESCE(SUM(profit), 0) as total_profit,
-        COALESCE(AVG(total), 0) as average_sale
+        COALESCE(AVG(final_amount), 0) as average_sale
       FROM sales
       ${dateFilter}
     `, params);
 
-    const summary = summaryResult[0] || {};
+    const summary = getFirst(summaryResult);
 
     // Get daily breakdown
     const [dailyBreakdown] = await query(`
       SELECT 
         DATE(created_at) as date,
         COUNT(*) as transaction_count,
-        SUM(total) as total_sales,
+        SUM(final_amount) as total_sales,
         SUM(profit) as total_profit
       FROM sales
       ${dateFilter}
@@ -207,13 +210,13 @@ router.get('/period-total', authenticate, authorize('ADMIN', 'MANAGER'), async (
 
     const [result] = await query(`
       SELECT 
-        COALESCE(SUM(total), 0) as "totalSales",
+        COALESCE(SUM(final_amount), 0) as "totalSales",
         COUNT(*) as "transactionCount"
       FROM sales
       WHERE DATE(created_at) BETWEEN $1 AND $2
     `, [startDate, endDate]);
 
-    const data = result[0] || {};
+    const data = getFirst(result);
 
     res.json({ 
       success: true, 
@@ -264,10 +267,9 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
     }
 
     const saleId = uuidv4();
-    const transactionId = generateTransactionId();
+    const transactionId = generateTransactionId(); // Generated but not stored in database
     let subtotal = 0;
     let totalProfit = 0;
-    let totalCogs = 0;
 
     // Calculate totals and validate stock
     for (const item of items) {
@@ -307,36 +309,41 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
       item.cost_price = parseFloat(medicine.cost_price) || 0;
       item.subtotal = item.unit_price * item.quantity;
       item.profit = (item.unit_price - item.cost_price) * item.quantity;
-      item.cogs = item.cost_price * item.quantity;
       item.stock_deduction = stockNeeded;
       item.medicine_name = medicine.name;
 
       subtotal += item.subtotal;
       totalProfit += item.profit;
-      totalCogs += item.cogs;
     }
 
     // Apply discount and calculate totals
     const discountAmount = parseFloat(discount) || 0;
-    const tax = 0; // Set tax to 0 or calculate if needed
-    const total = subtotal - discountAmount + tax;
+    const finalAmount = subtotal - discountAmount; // This is what goes into final_amount column
 
     // Get cashier name
     const [userResult] = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
-    const cashierName = userResult[0]?.name || 'Unknown';
+    const cashierName = getFirst(userResult).name || 'Unknown';
 
-    // Create sale record with all required fields
+    // CORRECTED: Insert only columns that exist in your database schema
+    // Your schema has: total_amount, discount, final_amount, profit (no subtotal, tax, total, cost_of_goods_sold, transaction_id)
     await query(`
       INSERT INTO sales (
-        id, transaction_id, cashier_id, cashier_name, subtotal, discount, tax, total,
-        total_amount, final_amount, profit, cost_of_goods_sold, payment_method, 
-        customer_name, customer_phone, notes, created_at
+        id, cashier_id, cashier_name, total_amount, discount, final_amount,
+        profit, payment_method, customer_name, customer_phone, notes, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
     `, [
-      saleId, transactionId, req.user.id, cashierName, subtotal, discountAmount, tax, total,
-      subtotal, total, totalProfit, totalCogs, payment_method || 'CASH', 
-      customer_name || null, customer_phone || null, notes || null
+      saleId, 
+      req.user.id, 
+      cashierName, 
+      subtotal,           // total_amount column - the subtotal before discount
+      discountAmount,     // discount column
+      finalAmount,        // final_amount column - the amount after discount
+      totalProfit,        // profit column
+      payment_method || 'CASH', 
+      customer_name || null, 
+      customer_phone || null, 
+      notes || null
     ]);
 
     // Create sale items and update stock
@@ -346,13 +353,21 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
       await query(`
         INSERT INTO sale_items (
           id, sale_id, medicine_id, medicine_name, quantity, unit_type, unit_label, 
-          unit_price, subtotal, total_price, cost_price, cost_of_goods_sold
+          unit_price, cost_price, subtotal, profit
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
       `, [
-        itemId, saleId, item.medicine_id, item.medicine_name, item.quantity, 
-        item.unit_type || null, item.unit_label || null, item.unit_price, 
-        item.subtotal, item.subtotal, item.cost_price, item.cogs
+        itemId, 
+        saleId, 
+        item.medicine_id, 
+        item.medicine_name, 
+        item.quantity, 
+        item.unit_type || null, 
+        item.unit_label || null, 
+        item.unit_price, 
+        item.cost_price, 
+        item.subtotal, 
+        item.profit
       ]);
 
       // Update medicine stock
@@ -370,8 +385,14 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
         )
         VALUES ($1, $2, $3, 'SALE', $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
       `, [
-        movementId, item.medicine_id, item.medicine_name, item.stock_deduction, saleId, 
-        req.user.id, cashierName, req.user.role,
+        movementId, 
+        item.medicine_id, 
+        item.medicine_name, 
+        item.stock_deduction, 
+        saleId, 
+        req.user.id, 
+        cashierName, 
+        req.user.role,
         0, 0 // These would need to be calculated properly for full audit
       ]);
     }
@@ -380,13 +401,12 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
       success: true,
       data: {
         id: saleId,
-        transaction_id: transactionId,
+        transaction_id: transactionId, // Generated but not stored in database
         cashier_id: req.user.id,
         cashier_name: cashierName,
-        subtotal,
+        total_amount: subtotal,
         discount: discountAmount,
-        tax,
-        total,
+        final_amount: finalAmount,
         profit: totalProfit,
         payment_method: payment_method || 'CASH',
         items: items.map(i => ({
@@ -394,7 +414,8 @@ router.post('/', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, n
           medicine_name: i.medicine_name,
           quantity: i.quantity,
           unit_price: i.unit_price,
-          subtotal: i.subtotal
+          subtotal: i.subtotal,
+          profit: i.profit
         }))
       }
     });
