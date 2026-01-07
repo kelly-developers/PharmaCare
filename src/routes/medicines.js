@@ -5,12 +5,9 @@ const { authenticate, authorize } = require('../middleware/auth');
 
 const router = express.Router();
 
-// GET /api/medicines - Get all medicines (paginated)
+// GET /api/medicines - Get all medicines (NO pagination - returns ALL)
 router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
     const search = req.query.search || '';
     const category = req.query.category || '';
 
@@ -30,6 +27,7 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
       params.push(category);
     }
 
+    // Get ALL medicines - no pagination
     const [medicines] = await query(`
       SELECT 
         id, name, generic_name, category, description, manufacturer,
@@ -45,25 +43,18 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
       FROM medicines
       WHERE ${whereClause}
       ORDER BY name
-      LIMIT $${paramIndex + 1} OFFSET $${paramIndex + 2}
-    `, [...params, size, offset]);
-
-    const [countResult] = await query(`
-      SELECT COUNT(*) as total
-      FROM medicines
-      WHERE ${whereClause}
     `, params);
 
-    const total = parseInt(countResult[0]?.total) || 0;
+    const total = medicines.length;
 
     res.json({
       success: true,
       data: {
         content: medicines,
         totalElements: total,
-        totalPages: Math.ceil(total / size),
-        page,
-        size
+        totalPages: 1,
+        page: 0,
+        size: total
       }
     });
   } catch (error) {
