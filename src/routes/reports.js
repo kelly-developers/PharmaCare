@@ -51,19 +51,70 @@ router.get('/dashboard', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST
     `);
     const stockValue = parseFloat(getFirst(stockValueResult).stock_value) || 0;
 
+    // Inventory value (cost price)
+    const [inventoryValueResult] = await query(`
+      SELECT COALESCE(SUM(stock_quantity * cost_price), 0) as inventory_value
+      FROM medicines
+    `);
+    const inventoryValue = parseFloat(getFirst(inventoryValueResult).inventory_value) || 0;
+
+    // Monthly profit data (current month and last month)
+    const currentDate = new Date();
+    const currentYear = currentDate.getFullYear();
+    const currentMonth = currentDate.getMonth() + 1;
+    
+    // Current month profit
+    const [currentMonthProfitResult] = await query(`
+      SELECT COALESCE(SUM(profit), 0) as total_profit
+      FROM sales
+      WHERE EXTRACT(YEAR FROM created_at) = $1 
+        AND EXTRACT(MONTH FROM created_at) = $2
+    `, [currentYear, currentMonth]);
+    const currentMonthProfit = parseFloat(getFirst(currentMonthProfitResult).total_profit) || 0;
+
+    // Last month profit
+    let lastMonth = currentMonth - 1;
+    let lastYear = currentYear;
+    if (lastMonth === 0) {
+      lastMonth = 12;
+      lastYear = currentYear - 1;
+    }
+    
+    const [lastMonthProfitResult] = await query(`
+      SELECT COALESCE(SUM(profit), 0) as total_profit
+      FROM sales
+      WHERE EXTRACT(YEAR FROM created_at) = $1 
+        AND EXTRACT(MONTH FROM created_at) = $2
+    `, [lastYear, lastMonth]);
+    const lastMonthProfit = parseFloat(getFirst(lastMonthProfitResult).total_profit) || 0;
+
     res.json({
       success: true,
       data: {
+        // Today's metrics
         todaySales: parseFloat(salesData.total_sales) || 0,
         todayTransactions: parseInt(salesData.transaction_count) || 0,
         todayProfit: parseFloat(salesData.total_profit) || 0,
-        totalMedicines: parseInt(stockData.total_medicines) || 0,
-        lowStockItems: parseInt(stockData.low_stock) || 0,
-        outOfStockItems: parseInt(stockData.out_of_stock) || 0,
-        expiringSoon: parseInt(stockData.expiring_soon) || 0,
+        
+        // Monthly profit data
+        thisMonthProfit: currentMonthProfit,
+        lastMonthProfit: lastMonthProfit,
+        
+        // Inventory data
+        inventoryValue: inventoryValue, // cost value
+        stockValue: stockValue, // selling price value
+        totalStockItems: parseInt(stockData.total_medicines) || 0,
+        lowStockCount: parseInt(stockData.low_stock) || 0,
+        outOfStockCount: parseInt(stockData.out_of_stock) || 0,
+        expiringSoonCount: parseInt(stockData.expiring_soon) || 0,
+        
+        // Pending items
         pendingPrescriptions: parseInt(prescriptionData.pending) || 0,
         pendingExpenses: parseInt(expenseData.pending) || 0,
-        stockValue
+        
+        // Additional data for compatibility
+        todayExpenses: 0, // You can add this if you have daily expenses tracking
+        pendingOrders: 0 // You can add this if you have purchase orders
       }
     });
   } catch (error) {
