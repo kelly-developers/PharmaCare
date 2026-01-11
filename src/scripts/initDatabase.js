@@ -383,6 +383,17 @@ const createAdminUser = async (client) => {
 const createDefaultCategories = async (client) => {
   console.log('📂 Checking default categories...');
 
+  const categories = [
+    { name: 'Tablets', description: 'Oral solid dosage forms' },
+    { name: 'Capsules', description: 'Oral capsule medications' },
+    { name: 'Syrups', description: 'Liquid oral medications' },
+    { name: 'Injections', description: 'Injectable medications' },
+    { name: 'Topicals', description: 'Creams, ointments, and lotions' },
+    { name: 'Drops', description: 'Eye, ear, and nasal drops' },
+    { name: 'Supplies', description: 'Medical supplies and consumables' },
+    { name: 'Equipment', description: 'Medical equipment and devices' },
+  ];
+
   for (const cat of categories) {
     const existing = await client.query(
       'SELECT id FROM categories WHERE name = $1',
