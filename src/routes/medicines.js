@@ -514,9 +514,9 @@ router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) =
 });
 
 // POST /api/medicines/:id/add-stock - Add stock
-router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
-    const { quantity, batch_number, expiry_date, cost_price, notes } = req.body;
+    const { quantity, batch_number, expiry_date, cost_price, notes, reason } = req.body;
 
     if (!quantity || quantity <= 0) {
       return res.status(400).json({ success: false, error: 'Valid quantity is required' });
@@ -531,6 +531,10 @@ router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER'), async
     const medicine = medicines[0];
     const previousStock = medicine.stock_quantity;
     const newStock = previousStock + parseInt(quantity);
+
+    // Get user info for tracking
+    const [userResult] = await query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
+    const user = userResult && userResult.length > 0 ? userResult[0] : { name: 'Unknown', role: 'UNKNOWN' };
 
     // Update medicine stock and optionally update cost price and batch info
     const updateFields = [];
@@ -564,15 +568,29 @@ router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER'), async
       updateValues
     );
 
-    // Record stock movement
+    // Record stock movement with all required fields
     const movementId = uuidv4();
     await query(`
       INSERT INTO stock_movements (
-        id, medicine_id, type, quantity, batch_number, notes, created_by, 
-        created_at, medicine_name, previous_stock, new_stock
+        id, medicine_id, medicine_name, type, quantity, batch_number, 
+        reason, notes, created_by, performed_by_name, performed_by_role,
+        previous_stock, new_stock, created_at
       )
-      VALUES ($1, $2, 'ADDITION', $3, $4, $5, $6, CURRENT_TIMESTAMP, $7, $8, $9)
-    `, [movementId, req.params.id, quantity, batch_number || null, notes || null, req.user.id, medicine.name, previousStock, newStock]);
+      VALUES ($1, $2, $3, 'ADDITION', $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+    `, [
+      movementId, 
+      req.params.id, 
+      medicine.name, 
+      parseInt(quantity), 
+      batch_number || null, 
+      reason || 'Stock addition',
+      notes || null, 
+      req.user.id, 
+      user.name || 'Unknown',
+      user.role || 'UNKNOWN',
+      previousStock, 
+      newStock
+    ]);
 
     res.json({
       success: true,
@@ -584,9 +602,11 @@ router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER'), async
         batch_number: batch_number || medicine.batch_number,
         expiry_date: expiry_date || medicine.expiry_date,
         cost_price: cost_price || medicine.cost_price
-      }
+      },
+      message: 'Stock added successfully'
     });
   } catch (error) {
+    console.error('Add stock error:', error);
     next(error);
   }
 });
