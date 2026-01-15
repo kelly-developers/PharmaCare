@@ -9,7 +9,23 @@ const router = express.Router();
 // Helper to safely get first result
 const getFirst = (results) => results[0] || {};
 
-// GET /api/users/profile - Get current user profile (must be before /:id)
+// Helper to normalize user data
+const normalizeUser = (user) => {
+  return {
+    id: user.id,
+    name: user.name,
+    email: user.email,
+    username: user.username,
+    role: user.role,
+    phone: user.phone || '',
+    isActive: user.active,
+    createdAt: user.created_at,
+    lastLogin: user.last_login,
+    updatedAt: user.updated_at
+  };
+};
+
+// GET /api/users/profile - Get current user profile
 router.get('/profile', authenticate, async (req, res, next) => {
   try {
     const [users] = await query(
@@ -17,7 +33,10 @@ router.get('/profile', authenticate, async (req, res, next) => {
       [req.user.id]
     );
 
-    res.json({ success: true, data: users[0] });
+    res.json({ 
+      success: true, 
+      data: normalizeUser(users[0]) 
+    });
   } catch (error) {
     next(error);
   }
@@ -38,13 +57,16 @@ router.put('/profile', authenticate, async (req, res, next) => {
       [req.user.id]
     );
 
-    res.json({ success: true, data: users[0] });
+    res.json({ 
+      success: true, 
+      data: normalizeUser(users[0]) 
+    });
   } catch (error) {
     next(error);
   }
 });
 
-// GET /api/users/stats - Get user statistics (must be before /:id)
+// GET /api/users/stats - Get user statistics
 router.get('/stats', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
     const [totalResult] = await query('SELECT COUNT(*) as total FROM users');
@@ -55,16 +77,26 @@ router.get('/stats', authenticate, authorize('ADMIN'), async (req, res, next) =>
       SELECT role, COUNT(*) as count FROM users GROUP BY role
     `);
 
-    const roleBreakdown = {};
+    const roleBreakdown = {
+      adminUsersCount: 0,
+      managerUsersCount: 0,
+      pharmacistUsersCount: 0,
+      cashierUsersCount: 0
+    };
+
     roleCounts.forEach(r => {
-      roleBreakdown[r.role] = parseInt(r.count);
+      const roleKey = `${r.role.toLowerCase()}UsersCount`;
+      if (roleBreakdown.hasOwnProperty(roleKey)) {
+        roleBreakdown[roleKey] = parseInt(r.count);
+      }
     });
 
     res.json({
       success: true,
       data: { 
-        totalUsers: parseInt(getFirst(totalResult).total) || 0, 
-        activeUsers: parseInt(getFirst(activeResult).active) || 0,
+        totalUsersCount: parseInt(getFirst(totalResult).total) || 0, 
+        activeUsersCount: parseInt(getFirst(activeResult).active) || 0,
+        inactiveUsersCount: (parseInt(getFirst(totalResult).total) || 0) - (parseInt(getFirst(activeResult).active) || 0),
         ...roleBreakdown
       }
     });
@@ -76,27 +108,45 @@ router.get('/stats', authenticate, authorize('ADMIN'), async (req, res, next) =>
 // GET /api/users/role/:role - Get users by role
 router.get('/role/:role', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const search = req.query.search || '';
 
-    const [users] = await query(
-      `SELECT id, username, email, name, role, phone, active, created_at 
-       FROM users WHERE role = $1 LIMIT $2 OFFSET $3`,
-      [req.params.role, size, offset]
-    );
+    let queryText = `
+      SELECT id, username, email, name, role, phone, active, created_at, last_login 
+      FROM users 
+      WHERE role = $1
+    `;
+    let queryCount = 'SELECT COUNT(*) as total FROM users WHERE role = $1';
+    let params = [req.params.role];
+    let paramCount = 1;
 
-    const [countResult] = await query('SELECT COUNT(*) as total FROM users WHERE role = $1', [req.params.role]);
+    if (search) {
+      paramCount++;
+      queryText += ` AND (name ILIKE $${paramCount} OR email ILIKE $${paramCount})`;
+      queryCount += ` AND (name ILIKE $2 OR email ILIKE $2)`;
+      params.push(`%${search}%`);
+    }
+
+    queryText += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+
+    const [users] = await query(queryText, params);
+    const [countResult] = await query(queryCount, params.slice(0, search ? 2 : 1));
+    
     const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
-      data: {
-        content: users,
-        totalElements: total,
-        totalPages: Math.ceil(total / size),
+      data: users.map(normalizeUser),
+      pagination: {
         page,
-        size
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
       }
     });
   } catch (error) {
@@ -107,27 +157,54 @@ router.get('/role/:role', authenticate, authorize('ADMIN'), async (req, res, nex
 // GET /api/users - Get all users (paginated)
 router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    const search = req.query.search || '';
+    const role = req.query.role;
 
-    const [users] = await query(
-      `SELECT id, username, email, name, role, phone, active, created_at, last_login 
-       FROM users ORDER BY created_at DESC LIMIT $1 OFFSET $2`,
-      [size, offset]
-    );
+    let queryText = `
+      SELECT id, username, email, name, role, phone, active, created_at, last_login 
+      FROM users 
+      WHERE 1=1
+    `;
+    
+    let queryCount = 'SELECT COUNT(*) as total FROM users WHERE 1=1';
+    let params = [];
+    let paramCount = 0;
 
-    const [countResult] = await query('SELECT COUNT(*) as total FROM users');
+    if (search) {
+      paramCount++;
+      queryText += ` AND (name ILIKE $${paramCount} OR email ILIKE $${paramCount} OR phone ILIKE $${paramCount})`;
+      queryCount += ` AND (name ILIKE $${paramCount} OR email ILIKE $${paramCount} OR phone ILIKE $${paramCount})`;
+      params.push(`%${search}%`);
+    }
+
+    if (role) {
+      paramCount++;
+      queryText += ` AND role = $${paramCount}`;
+      queryCount += ` AND role = $${paramCount}`;
+      params.push(role);
+    }
+
+    queryText += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
+    params.push(limit, offset);
+
+    const [users] = await query(queryText, params);
+    const [countResult] = await query(queryCount, params.slice(0, search || role ? params.length - 2 : 0));
+    
     const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
       success: true,
-      data: {
-        content: users,
-        totalElements: total,
-        totalPages: Math.ceil(total / size),
+      data: users.map(normalizeUser),
+      pagination: {
         page,
-        size
+        limit,
+        total,
+        pages: Math.ceil(total / limit),
+        hasNext: page < Math.ceil(total / limit),
+        hasPrev: page > 1
       }
     });
   } catch (error) {
@@ -152,7 +229,10 @@ router.get('/:id', authenticate, async (req, res, next) => {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
 
-    res.json({ success: true, data: users[0] });
+    res.json({ 
+      success: true, 
+      data: normalizeUser(users[0]) 
+    });
   } catch (error) {
     next(error);
   }
@@ -161,20 +241,31 @@ router.get('/:id', authenticate, async (req, res, next) => {
 // POST /api/users - Create user
 router.post('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
-    const { username, email, password, name, role, phone } = req.body;
+    const { name, email, password, role, phone } = req.body;
 
-    if (!username || !email || !password || !name || !role) {
-      return res.status(400).json({ success: false, error: 'Username, email, password, name, and role are required' });
+    console.log('Creating user with data:', { name, email, password, role, phone });
+
+    if (!name || !email || !password || !role) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Name, email, password, and role are required' 
+      });
     }
+
+    // Generate username from email
+    const username = email.split('@')[0];
 
     // Check if user already exists
     const [existing] = await query(
-      'SELECT id FROM users WHERE username = $1 OR email = $2',
-      [username, email]
+      'SELECT id FROM users WHERE email = $1',
+      [email]
     );
 
     if (existing.length > 0) {
-      return res.status(409).json({ success: false, error: 'Username or email already exists' });
+      return res.status(409).json({ 
+        success: false, 
+        error: 'Email already exists' 
+      });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -183,16 +274,25 @@ router.post('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
     await query(
       `INSERT INTO users (id, username, email, password, name, role, phone, active, created_at, updated_at) 
        VALUES ($1, $2, $3, $4, $5, $6, $7, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [id, username, email, hashedPassword, name, role, phone || null]
+      [id, username, email, hashedPassword, name, role.toUpperCase(), phone || null]
+    );
+
+    const [newUser] = await query(
+      'SELECT id, username, email, name, role, phone, active, created_at FROM users WHERE id = $1',
+      [id]
     );
 
     res.status(201).json({
       success: true,
-      data: { id, username, email, name, role, phone, active: true }
+      data: normalizeUser(newUser[0])
     });
   } catch (error) {
+    console.error('Error creating user:', error);
     if (error.code === '23505') {
-      return res.status(409).json({ success: false, error: 'Username or email already exists' });
+      return res.status(409).json({ 
+        success: false, 
+        error: 'Email already exists' 
+      });
     }
     next(error);
   }
@@ -206,17 +306,24 @@ router.put('/:id', authenticate, async (req, res, next) => {
       return res.status(403).json({ success: false, error: 'Access denied' });
     }
 
-    const { name, email, role, phone, password } = req.body;
+    const { name, email, role, phone, password, isActive } = req.body;
 
     let queryText = 'UPDATE users SET name = $1, email = $2, phone = $3, updated_at = CURRENT_TIMESTAMP';
     let params = [name, email, phone || null];
     let paramIndex = 3;
 
-    // Only admin can change role
-    if (req.user.role === 'ADMIN' && role) {
-      paramIndex++;
-      queryText += `, role = $${paramIndex}`;
-      params.push(role);
+    // Only admin can change role and active status
+    if (req.user.role === 'ADMIN') {
+      if (role) {
+        paramIndex++;
+        queryText += `, role = $${paramIndex}`;
+        params.push(role.toUpperCase());
+      }
+      if (isActive !== undefined) {
+        paramIndex++;
+        queryText += `, active = $${paramIndex}`;
+        params.push(isActive);
+      }
     }
 
     // Update password if provided
@@ -234,7 +341,7 @@ router.put('/:id', authenticate, async (req, res, next) => {
     await query(queryText, params);
 
     const [users] = await query(
-      'SELECT id, username, email, name, role, phone, active FROM users WHERE id = $1',
+      'SELECT id, username, email, name, role, phone, active, created_at FROM users WHERE id = $1',
       [req.params.id]
     );
 
@@ -242,7 +349,10 @@ router.put('/:id', authenticate, async (req, res, next) => {
       return res.status(404).json({ success: false, error: 'User not found' });
     }
 
-    res.json({ success: true, data: users[0] });
+    res.json({ 
+      success: true, 
+      data: normalizeUser(users[0]) 
+    });
   } catch (error) {
     next(error);
   }
@@ -253,11 +363,21 @@ router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) =
   try {
     // Prevent deleting own account
     if (req.user.id === req.params.id) {
-      return res.status(400).json({ success: false, error: 'Cannot deactivate your own account' });
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Cannot deactivate your own account' 
+      });
     }
 
-    await query('UPDATE users SET active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
-    res.json({ success: true, message: 'User deactivated successfully' });
+    await query(
+      'UPDATE users SET active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', 
+      [req.params.id]
+    );
+    
+    res.json({ 
+      success: true, 
+      message: 'User deactivated successfully' 
+    });
   } catch (error) {
     next(error);
   }
@@ -266,14 +386,20 @@ router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) =
 // PATCH /api/users/:id/activate - Activate user
 router.patch('/:id/activate', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
-    await query('UPDATE users SET active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
+    await query(
+      'UPDATE users SET active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1', 
+      [req.params.id]
+    );
 
     const [users] = await query(
       'SELECT id, username, email, name, role, phone, active FROM users WHERE id = $1',
       [req.params.id]
     );
 
-    res.json({ success: true, data: users[0] });
+    res.json({ 
+      success: true, 
+      data: normalizeUser(users[0]) 
+    });
   } catch (error) {
     next(error);
   }
