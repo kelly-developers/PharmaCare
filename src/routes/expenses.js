@@ -99,31 +99,53 @@ router.get('/category/:category', authenticate, authorize('ADMIN', 'MANAGER'), a
   }
 });
 
-// GET /api/expenses - Get all expenses (paginated)
+// GET /api/expenses - Get all expenses (NO pagination - returns ALL expenses)
 router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
+    const { startDate, endDate, status, category } = req.query;
+    
+    let whereClause = '1=1';
+    const params = [];
+    let paramIndex = 0;
+    
+    if (startDate && endDate) {
+      paramIndex++;
+      whereClause += ` AND DATE(e.expense_date) >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+      whereClause += ` AND DATE(e.expense_date) <= $${paramIndex}`;
+      params.push(endDate);
+    }
+    
+    if (status) {
+      paramIndex++;
+      whereClause += ` AND e.status = $${paramIndex}`;
+      params.push(status.toUpperCase());
+    }
+    
+    if (category) {
+      paramIndex++;
+      whereClause += ` AND e.category = $${paramIndex}`;
+      params.push(category);
+    }
 
     const [expenses] = await query(`
       SELECT e.*
       FROM expenses e
+      WHERE ${whereClause}
       ORDER BY e.created_at DESC
-      LIMIT $1 OFFSET $2
-    `, [size, offset]);
+    `, params);
 
-    const [countResult] = await query('SELECT COUNT(*) as total FROM expenses');
-    const total = parseInt(getFirst(countResult).total) || 0;
+    const total = expenses.length;
 
     res.json({
       success: true,
       data: {
         content: expenses,
         totalElements: total,
-        totalPages: Math.ceil(total / size),
-        page,
-        size
+        totalPages: 1,
+        page: 0,
+        size: total
       }
     });
   } catch (error) {

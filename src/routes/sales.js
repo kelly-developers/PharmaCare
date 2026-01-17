@@ -271,12 +271,36 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
   }
 });
 
-// GET /api/sales - Get all sales (paginated)
+// GET /api/sales - Get all sales (NO pagination - returns ALL sales)
 router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
+    // Optional date filters
+    const { startDate, endDate, cashierId, paymentMethod } = req.query;
+    
+    let whereClause = '1=1';
+    const params = [];
+    let paramIndex = 0;
+    
+    if (startDate && endDate) {
+      paramIndex++;
+      whereClause += ` AND DATE(s.created_at) >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+      whereClause += ` AND DATE(s.created_at) <= $${paramIndex}`;
+      params.push(endDate);
+    }
+    
+    if (cashierId) {
+      paramIndex++;
+      whereClause += ` AND s.cashier_id = $${paramIndex}`;
+      params.push(cashierId);
+    }
+    
+    if (paymentMethod) {
+      paramIndex++;
+      whereClause += ` AND s.payment_method = $${paramIndex}`;
+      params.push(paymentMethod.toUpperCase());
+    }
 
     const [sales] = await query(`
       SELECT 
@@ -299,22 +323,21 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, ne
         ) as items
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
+      WHERE ${whereClause}
       GROUP BY s.id
       ORDER BY s.created_at DESC
-      LIMIT $1 OFFSET $2
-    `, [size, offset]);
+    `, params);
 
-    const [countResult] = await query('SELECT COUNT(*) as total FROM sales');
-    const total = parseInt(getFirst(countResult).total) || 0;
+    const total = sales.length;
 
     res.json({
       success: true,
       data: {
         content: sales,
         totalElements: total,
-        totalPages: Math.ceil(total / size),
-        page,
-        size
+        totalPages: 1,
+        page: 0,
+        size: total
       }
     });
   } catch (error) {

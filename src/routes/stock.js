@@ -143,31 +143,53 @@ router.get('/breakdown', authenticate, authorize('ADMIN', 'MANAGER'), async (req
   }
 });
 
-// GET /api/stock/movements - Get stock movements (paginated)
+// GET /api/stock/movements - Get all stock movements (NO pagination - returns ALL movements)
 router.get('/movements', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
+    const { type, medicineId, startDate, endDate } = req.query;
+    
+    let whereClause = '1=1';
+    const params = [];
+    let paramIndex = 0;
+    
+    if (type) {
+      paramIndex++;
+      whereClause += ` AND sm.type = $${paramIndex}`;
+      params.push(type.toUpperCase());
+    }
+    
+    if (medicineId) {
+      paramIndex++;
+      whereClause += ` AND sm.medicine_id = $${paramIndex}`;
+      params.push(medicineId);
+    }
+    
+    if (startDate && endDate) {
+      paramIndex++;
+      whereClause += ` AND DATE(sm.created_at) >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+      whereClause += ` AND DATE(sm.created_at) <= $${paramIndex}`;
+      params.push(endDate);
+    }
 
     const [movements] = await query(`
       SELECT sm.*
       FROM stock_movements sm
+      WHERE ${whereClause}
       ORDER BY sm.created_at DESC
-      LIMIT $1 OFFSET $2
-    `, [size, offset]);
+    `, params);
 
-    const [countResult] = await query('SELECT COUNT(*) as total FROM stock_movements');
-    const total = parseInt(getFirst(countResult).total) || 0;
+    const total = movements.length;
 
     res.json({
       success: true,
       data: {
         content: movements,
         totalElements: total,
-        totalPages: Math.ceil(total / size),
-        page,
-        size
+        totalPages: 1,
+        page: 0,
+        size: total
       }
     });
   } catch (error) {

@@ -54,29 +54,43 @@ router.get('/name/:name', authenticate, authorize('ADMIN', 'MANAGER'), async (re
   }
 });
 
-// GET /api/suppliers - Get all suppliers (paginated)
+// GET /api/suppliers - Get all suppliers (NO pagination - returns ALL suppliers)
 router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
+    const { search, active } = req.query;
+    
+    let whereClause = '1=1';
+    const params = [];
+    let paramIndex = 0;
+    
+    if (search) {
+      paramIndex++;
+      whereClause += ` AND (name ILIKE $${paramIndex} OR contact_person ILIKE $${paramIndex} OR email ILIKE $${paramIndex})`;
+      params.push(`%${search}%`);
+    }
+    
+    if (active !== undefined) {
+      paramIndex++;
+      whereClause += ` AND (is_active = $${paramIndex} OR active = $${paramIndex})`;
+      params.push(active === 'true');
+    }
 
-    const [suppliers] = await query(
-      'SELECT * FROM suppliers ORDER BY name LIMIT $1 OFFSET $2',
-      [size, offset]
-    );
+    const [suppliers] = await query(`
+      SELECT * FROM suppliers
+      WHERE ${whereClause}
+      ORDER BY name
+    `, params);
 
-    const [countResult] = await query('SELECT COUNT(*) as total FROM suppliers');
-    const total = parseInt(getFirst(countResult).total) || 0;
+    const total = suppliers.length;
 
     res.json({
       success: true,
       data: {
         content: suppliers,
         totalElements: total,
-        totalPages: Math.ceil(total / size),
-        page,
-        size
+        totalPages: 1,
+        page: 0,
+        size: total
       }
     });
   } catch (error) {

@@ -656,4 +656,161 @@ router.get('/medicine-details', authenticate, authorize('ADMIN', 'MANAGER', 'PHA
   }
 });
 
+// GET /api/reports/sales-trend - Get sales trend data for charts
+router.get('/sales-trend', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { period } = req.query;
+    let dateFormat, dateInterval, dateLimit;
+
+    switch (period) {
+      case 'week':
+        dateFormat = 'YYYY-MM-DD';
+        dateInterval = "7 days";
+        dateLimit = 7;
+        break;
+      case 'quarter':
+        dateFormat = 'YYYY-MM';
+        dateInterval = "3 months";
+        dateLimit = 3;
+        break;
+      case 'year':
+        dateFormat = 'YYYY-MM';
+        dateInterval = "12 months";
+        dateLimit = 12;
+        break;
+      case 'month':
+      default:
+        dateFormat = 'YYYY-MM-DD';
+        dateInterval = "30 days";
+        dateLimit = 30;
+        break;
+    }
+
+    // Get daily/monthly sales data
+    const [salesData] = await query(`
+      SELECT 
+        DATE(created_at) as date,
+        COALESCE(SUM(final_amount), 0) as sales,
+        COALESCE(SUM(total_amount - final_amount + profit), 0) as cost,
+        COALESCE(SUM(profit), 0) as profit,
+        COUNT(*) as transactions
+      FROM sales
+      WHERE created_at >= CURRENT_DATE - INTERVAL '${dateInterval}'
+      GROUP BY DATE(created_at)
+      ORDER BY date ASC
+      LIMIT ${dateLimit}
+    `);
+
+    const trendData = salesData.map(row => ({
+      date: row.date,
+      sales: parseFloat(row.sales) || 0,
+      revenue: parseFloat(row.sales) || 0,
+      cost: parseFloat(row.cost) || 0,
+      profit: parseFloat(row.profit) || 0,
+      transactions: parseInt(row.transactions) || 0
+    }));
+
+    res.json({ success: true, data: trendData });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/reports/sales-by-category - Get sales breakdown by category
+router.get('/sales-by-category', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const start = startDate || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0];
+    const end = endDate || new Date().toISOString().split('T')[0];
+
+    const [categoryData] = await query(`
+      SELECT 
+        m.category,
+        COALESCE(SUM(si.subtotal), 0) as total,
+        COALESCE(SUM(si.quantity), 0) as quantity_sold,
+        COUNT(DISTINCT s.id) as transaction_count
+      FROM sale_items si
+      JOIN sales s ON si.sale_id = s.id
+      JOIN medicines m ON si.medicine_id = m.id
+      WHERE DATE(s.created_at) BETWEEN $1 AND $2
+      GROUP BY m.category
+      ORDER BY total DESC
+    `, [start, end]);
+
+    const result = categoryData.map(row => ({
+      category: row.category || 'Uncategorized',
+      name: row.category || 'Uncategorized',
+      total: parseFloat(row.total) || 0,
+      value: parseFloat(row.total) || 0,
+      quantity_sold: parseInt(row.quantity_sold) || 0,
+      transaction_count: parseInt(row.transaction_count) || 0
+    }));
+
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/reports/cash-flow - Get cash flow statement
+router.get('/cash-flow', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { startDate, endDate } = req.query;
+    const start = startDate || new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
+    const end = endDate || new Date().toISOString().split('T')[0];
+
+    // Cash inflows (sales)
+    const [salesResult] = await query(`
+      SELECT COALESCE(SUM(final_amount), 0) as value
+      FROM sales
+      WHERE DATE(created_at) BETWEEN $1 AND $2
+    `, [start, end]);
+    const salesCash = parseFloat(getFirst(salesResult).value) || 0;
+
+    // Cash outflows (expenses)
+    const [expenseResult] = await query(`
+      SELECT COALESCE(SUM(amount), 0) as value
+      FROM expenses
+      WHERE status = 'APPROVED' AND DATE(expense_date) BETWEEN $1 AND $2
+    `, [start, end]);
+    const expensesCash = parseFloat(getFirst(expenseResult).value) || 0;
+
+    // Cash outflows (purchase orders received)
+    const [purchaseResult] = await query(`
+      SELECT COALESCE(SUM(total), 0) as value
+      FROM purchase_orders
+      WHERE status = 'RECEIVED' AND DATE(received_at) BETWEEN $1 AND $2
+    `, [start, end]);
+    const purchasesCash = parseFloat(getFirst(purchaseResult).value) || 0;
+
+    const netCashFlow = salesCash - expensesCash - purchasesCash;
+
+    res.json({
+      success: true,
+      data: {
+        period: { startDate: start, endDate: end },
+        operatingActivities: {
+          cashFromSales: salesCash,
+          cashToSuppliers: purchasesCash,
+          cashToExpenses: expensesCash,
+          netOperatingCash: salesCash - expensesCash - purchasesCash
+        },
+        investingActivities: {
+          equipmentPurchases: 0,
+          netInvestingCash: 0
+        },
+        financingActivities: {
+          loanRepayments: 0,
+          netFinancingCash: 0
+        },
+        netCashFlow,
+        openingBalance: 0,
+        closingBalance: netCashFlow
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 module.exports = router;

@@ -64,21 +64,44 @@ router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
   }
 });
 
-// GET /api/purchase-orders - Get all purchase orders (paginated)
+// GET /api/purchase-orders - Get all purchase orders (NO pagination - returns ALL orders)
 router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const page = parseInt(req.query.page) || 0;
-    const size = parseInt(req.query.size) || 20;
-    const offset = page * size;
+    const { status, supplierId, startDate, endDate } = req.query;
+    
+    let whereClause = '1=1';
+    const params = [];
+    let paramIndex = 0;
+    
+    if (status) {
+      paramIndex++;
+      whereClause += ` AND po.status = $${paramIndex}`;
+      params.push(status.toUpperCase());
+    }
+    
+    if (supplierId) {
+      paramIndex++;
+      whereClause += ` AND po.supplier_id = $${paramIndex}`;
+      params.push(supplierId);
+    }
+    
+    if (startDate && endDate) {
+      paramIndex++;
+      whereClause += ` AND DATE(po.created_at) >= $${paramIndex}`;
+      params.push(startDate);
+      paramIndex++;
+      whereClause += ` AND DATE(po.created_at) <= $${paramIndex}`;
+      params.push(endDate);
+    }
 
     const [orders] = await query(`
       SELECT po.*
       FROM purchase_orders po
+      WHERE ${whereClause}
       ORDER BY po.created_at DESC
-      LIMIT $1 OFFSET $2
-    `, [size, offset]);
+    `, params);
 
-    // Get order items
+    // Get order items for each order
     for (let order of orders) {
       const [items] = await query(`
         SELECT poi.*
@@ -88,17 +111,16 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, ne
       order.items = items;
     }
 
-    const [countResult] = await query('SELECT COUNT(*) as total FROM purchase_orders');
-    const total = parseInt(getFirst(countResult).total) || 0;
+    const total = orders.length;
 
     res.json({
       success: true,
       data: {
         content: orders,
         totalElements: total,
-        totalPages: Math.ceil(total / size),
-        page,
-        size
+        totalPages: 1,
+        page: 0,
+        size: total
       }
     });
   } catch (error) {

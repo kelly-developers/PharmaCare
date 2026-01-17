@@ -2,10 +2,46 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { pool, config } = require('../config/database');
 
+// Database version tracking table
+const createVersionTable = async (client) => {
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS schema_version (
+      id SERIAL PRIMARY KEY,
+      version INTEGER NOT NULL,
+      description TEXT,
+      applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      checksum VARCHAR(64)
+    )
+  `);
+  console.log('📊 Schema version table ready');
+};
+
+// Get current database version
+const getCurrentVersion = async (client) => {
+  try {
+    const result = await client.query(
+      'SELECT MAX(version) as current_version FROM schema_version'
+    );
+    return result.rows[0]?.current_version || 0;
+  } catch (error) {
+    // Table doesn't exist yet
+    return 0;
+  }
+};
+
+// Record migration
+const recordMigration = async (client, version, description) => {
+  await client.query(
+    'INSERT INTO schema_version (version, description) VALUES ($1, $2)',
+    [version, description]
+  );
+  console.log(`📝 Recorded migration: v${version} - ${description}`);
+};
+
+// Schema creation
 const createSchema = async (client) => {
   console.log('📦 Creating schema if not exists...');
 
-  // Safely quote schema identifier (cannot be parameterized in pg)
   const schema = String(config.schema || 'public').replace(/"/g, '""');
   const quotedSchema = `"${schema}"`;
 
@@ -14,8 +50,9 @@ const createSchema = async (client) => {
   console.log(`✅ Schema '${config.schema}' ready`);
 };
 
-const createTables = async (client) => {
-  console.log('📋 Creating tables...');
+// V1: Initial tables
+const createV1Tables = async (client) => {
+  console.log('📋 Creating v1 tables (initial schema)...');
 
   // Users table
   await client.query(`
@@ -33,7 +70,6 @@ const createTables = async (client) => {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ users table');
 
   // Categories table
   await client.query(`
@@ -45,9 +81,8 @@ const createTables = async (client) => {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ categories table');
 
-  // Medicines table with ALL columns including product_type, units, batch_number, etc.
+  // Medicines table
   await client.query(`
     CREATE TABLE IF NOT EXISTS medicines (
       id VARCHAR(36) PRIMARY KEY,
@@ -71,7 +106,6 @@ const createTables = async (client) => {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ medicines table');
 
   // Suppliers table
   await client.query(`
@@ -90,9 +124,8 @@ const createTables = async (client) => {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ suppliers table');
 
-  // Stock movements table with all tracking columns
+  // Stock movements table
   await client.query(`
     CREATE TABLE IF NOT EXISTS stock_movements (
       id VARCHAR(36) PRIMARY KEY,
@@ -112,7 +145,6 @@ const createTables = async (client) => {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ stock_movements table');
 
   // Sales table
   await client.query(`
@@ -131,7 +163,6 @@ const createTables = async (client) => {
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ sales table');
 
   // Sale items table
   await client.query(`
@@ -149,7 +180,13 @@ const createTables = async (client) => {
       profit DECIMAL(10, 2) DEFAULT 0
     )
   `);
-  console.log('   ✓ sale_items table');
+
+  await recordMigration(client, 1, 'Initial schema with users, categories, medicines, suppliers, stock movements, sales');
+};
+
+// V2: Additional tables
+const createV2Tables = async (client) => {
+  console.log('📋 Creating v2 tables (expenses, prescriptions)...');
 
   // Expenses table
   await client.query(`
@@ -173,7 +210,6 @@ const createTables = async (client) => {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ expenses table');
 
   // Prescriptions table
   await client.query(`
@@ -194,7 +230,6 @@ const createTables = async (client) => {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ prescriptions table');
 
   // Prescription items table
   await client.query(`
@@ -210,9 +245,15 @@ const createTables = async (client) => {
       instructions TEXT
     )
   `);
-  console.log('   ✓ prescription_items table');
 
-  // Purchase orders table with all tracking columns
+  await recordMigration(client, 2, 'Added expenses, prescriptions, and prescription_items tables');
+};
+
+// V3: Purchase orders and employees
+const createV3Tables = async (client) => {
+  console.log('📋 Creating v3 tables (purchase orders, employees, payroll)...');
+
+  // Purchase orders table
   await client.query(`
     CREATE TABLE IF NOT EXISTS purchase_orders (
       id VARCHAR(36) PRIMARY KEY,
@@ -240,7 +281,6 @@ const createTables = async (client) => {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ purchase_orders table');
 
   // Purchase order items table
   await client.query(`
@@ -256,7 +296,6 @@ const createTables = async (client) => {
       total_cost DECIMAL(10, 2) DEFAULT 0
     )
   `);
-  console.log('   ✓ purchase_order_items table');
 
   // Employees table
   await client.query(`
@@ -280,7 +319,6 @@ const createTables = async (client) => {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ employees table');
 
   // Payroll table
   await client.query(`
@@ -302,14 +340,45 @@ const createTables = async (client) => {
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
-  console.log('   ✓ payroll table');
 
-  console.log('✅ All tables created successfully');
+  await recordMigration(client, 3, 'Added purchase_orders, purchase_order_items, employees, and payroll tables');
 };
 
-const createIndexes = async (client) => {
-  console.log('🔍 Creating indexes...');
+// V4: Add indexes and constraints
+const createV4Indexes = async (client) => {
+  console.log('🔍 Creating indexes and constraints...');
   
+  // Add foreign key constraints
+  const constraints = [
+    { table: 'medicines', column: 'category_id', ref: 'categories(id)', constraint: 'fk_medicines_category' },
+    { table: 'stock_movements', column: 'medicine_id', ref: 'medicines(id)', constraint: 'fk_stock_movements_medicine' },
+    { table: 'sale_items', column: 'sale_id', ref: 'sales(id)', constraint: 'fk_sale_items_sale' },
+    { table: 'sale_items', column: 'medicine_id', ref: 'medicines(id)', constraint: 'fk_sale_items_medicine' },
+    { table: 'prescription_items', column: 'prescription_id', ref: 'prescriptions(id)', constraint: 'fk_prescription_items_prescription' },
+    { table: 'prescription_items', column: 'medicine_id', ref: 'medicines(id)', constraint: 'fk_prescription_items_medicine' },
+    { table: 'purchase_orders', column: 'supplier_id', ref: 'suppliers(id)', constraint: 'fk_purchase_orders_supplier' },
+    { table: 'purchase_order_items', column: 'purchase_order_id', ref: 'purchase_orders(id)', constraint: 'fk_purchase_order_items_order' },
+    { table: 'purchase_order_items', column: 'medicine_id', ref: 'medicines(id)', constraint: 'fk_purchase_order_items_medicine' },
+    { table: 'payroll', column: 'employee_id', ref: 'employees(id)', constraint: 'fk_payroll_employee' },
+  ];
+
+  for (const constraint of constraints) {
+    try {
+      await client.query(`
+        ALTER TABLE ${constraint.table}
+        ADD CONSTRAINT ${constraint.constraint}
+        FOREIGN KEY (${constraint.column}) REFERENCES ${constraint.ref}
+        ON DELETE RESTRICT
+      `);
+    } catch (error) {
+      // Constraint might already exist
+      if (!error.message.includes('already exists')) {
+        console.warn(`   ⚠️ Could not add constraint ${constraint.constraint}:`, error.message);
+      }
+    }
+  }
+
+  // Create indexes
   const indexes = [
     { name: 'idx_medicines_category', table: 'medicines', column: 'category' },
     { name: 'idx_medicines_expiry', table: 'medicines', column: 'expiry_date' },
@@ -331,58 +400,88 @@ const createIndexes = async (client) => {
   for (const idx of indexes) {
     try {
       await client.query(`CREATE INDEX IF NOT EXISTS ${idx.name} ON ${idx.table}(${idx.column})`);
-    } catch (err) {
-      // Ignore if index already exists
+    } catch (error) {
+      console.warn(`   ⚠️ Could not create index ${idx.name}:`, error.message);
     }
   }
-  
-  console.log('✅ Indexes created');
+
+  await recordMigration(client, 4, 'Added foreign key constraints and indexes');
 };
 
-const createAdminUser = async (client) => {
-  console.log('👤 Checking admin user...');
-  
-  if (process.env.ADMIN_ENABLED !== 'true') {
-    console.log('   Admin auto-creation is disabled');
-    return;
-  }
+// V5: Add audit triggers
+const createV5Triggers = async (client) => {
+  console.log('🔔 Creating audit triggers...');
 
-  const adminEmail = process.env.ADMIN_EMAIL;
-  const adminPassword = process.env.ADMIN_PASSWORD;
-  const adminName = process.env.ADMIN_NAME || 'System Administrator';
-  const adminPhone = process.env.ADMIN_PHONE || '';
-
-  if (!adminEmail || !adminPassword) {
-    console.log('   Admin credentials not configured');
-    return;
-  }
-
-  const existingAdmin = await client.query(
-    "SELECT id FROM users WHERE email = $1 OR role = 'ADMIN'",
-    [adminEmail]
-  );
-
-  if (existingAdmin.rows.length > 0) {
-    console.log('   Admin user already exists');
-    return;
-  }
-
-  const id = uuidv4();
-  const username = adminEmail.split('@')[0];
-  const hashedPassword = await bcrypt.hash(adminPassword, 10);
-
+  // Create updated_at trigger function
   await client.query(`
-    INSERT INTO users (id, username, email, password, name, phone, role, active, created_at, updated_at)
-    VALUES ($1, $2, $3, $4, $5, $6, 'ADMIN', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-  `, [id, username, adminEmail, hashedPassword, adminName, adminPhone]);
+    CREATE OR REPLACE FUNCTION update_updated_at_column()
+    RETURNS TRIGGER AS $$
+    BEGIN
+      NEW.updated_at = CURRENT_TIMESTAMP;
+      RETURN NEW;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
 
-  console.log('✅ Admin user created');
-  console.log(`   Email: ${adminEmail}`);
+  // Apply trigger to tables with updated_at column
+  const tablesWithUpdatedAt = [
+    'users', 'categories', 'medicines', 'suppliers', 'expenses', 
+    'prescriptions', 'purchase_orders', 'employees', 'payroll'
+  ];
+
+  for (const table of tablesWithUpdatedAt) {
+    try {
+      await client.query(`
+        CREATE TRIGGER update_${table}_updated_at
+        BEFORE UPDATE ON ${table}
+        FOR EACH ROW
+        EXECUTE FUNCTION update_updated_at_column()
+      `);
+    } catch (error) {
+      console.warn(`   ⚠️ Could not create trigger for ${table}:`, error.message);
+    }
+  }
+
+  await recordMigration(client, 5, 'Added audit triggers for updated_at columns');
 };
 
-const createDefaultCategories = async (client) => {
-  console.log('📂 Checking default categories...');
+const createDefaultData = async (client) => {
+  console.log('📥 Creating default data...');
 
+  // Create admin user if enabled
+  if (process.env.ADMIN_ENABLED === 'true') {
+    console.log('👤 Checking admin user...');
+    
+    const adminEmail = process.env.ADMIN_EMAIL;
+    const adminPassword = process.env.ADMIN_PASSWORD;
+    const adminName = process.env.ADMIN_NAME || 'System Administrator';
+    const adminPhone = process.env.ADMIN_PHONE || '';
+
+    if (adminEmail && adminPassword) {
+      const existingAdmin = await client.query(
+        "SELECT id FROM users WHERE email = $1 OR role = 'ADMIN'",
+        [adminEmail]
+      );
+
+      if (existingAdmin.rows.length === 0) {
+        const id = uuidv4();
+        const username = adminEmail.split('@')[0];
+        const hashedPassword = await bcrypt.hash(adminPassword, 10);
+
+        await client.query(`
+          INSERT INTO users (id, username, email, password, name, phone, role, active)
+          VALUES ($1, $2, $3, $4, $5, $6, 'ADMIN', true)
+        `, [id, username, adminEmail, hashedPassword, adminName, adminPhone]);
+
+        console.log('✅ Admin user created');
+      } else {
+        console.log('✅ Admin user already exists');
+      }
+    }
+  }
+
+  // Create default categories
+  console.log('📂 Checking default categories...');
   const categories = [
     { name: 'Tablets', description: 'Oral solid dosage forms' },
     { name: 'Capsules', description: 'Oral capsule medications' },
@@ -402,15 +501,25 @@ const createDefaultCategories = async (client) => {
 
     if (existing.rows.length === 0) {
       await client.query(
-        'INSERT INTO categories (id, name, description, created_at, updated_at) VALUES ($1, $2, $3, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)',
+        'INSERT INTO categories (id, name, description) VALUES ($1, $2, $3)',
         [uuidv4(), cat.name, cat.description]
       );
     }
   }
 
-  console.log('✅ Default categories ready');
+  console.log('✅ Default data ready');
 };
 
+// Migration definitions
+const migrations = [
+  { version: 1, description: 'Initial schema', migrate: createV1Tables },
+  { version: 2, description: 'Expenses and prescriptions', migrate: createV2Tables },
+  { version: 3, description: 'Purchase orders and employees', migrate: createV3Tables },
+  { version: 4, description: 'Indexes and constraints', migrate: createV4Indexes },
+  { version: 5, description: 'Audit triggers', migrate: createV5Triggers },
+];
+
+// Main initialization function
 const initializeDatabase = async () => {
   console.log('');
   console.log('🚀 PharmaCare Database Initialization');
@@ -418,20 +527,54 @@ const initializeDatabase = async () => {
   console.log(`   Host: ${config.host}`);
   console.log(`   Database: ${config.database}`);
   console.log(`   Schema: ${config.schema}`);
+  console.log(`   Environment: ${process.env.NODE_ENV || 'development'}`);
   console.log('');
-  
+
   const client = await pool.connect();
   
   try {
-    await createSchema(client);
-    await createTables(client);
-    await createIndexes(client);
-    await createAdminUser(client);
-    await createDefaultCategories(client);
+    // Set search path
+    await client.query(`SET search_path TO ${config.schema}, public`);
     
+    // Create version table
+    await createVersionTable(client);
+    
+    // Get current version
+    const currentVersion = await getCurrentVersion(client);
+    console.log(`📊 Current database version: v${currentVersion}`);
+    console.log(`📊 Target version: v${migrations.length}`);
+    console.log('');
+
+    // Run migrations if needed
+    if (currentVersion < migrations.length) {
+      console.log('🔄 Running migrations...');
+      console.log('');
+      
+      for (const migration of migrations) {
+        if (migration.version > currentVersion) {
+          console.log(`▶️  Running migration v${migration.version}: ${migration.description}`);
+          try {
+            await migration.migrate(client);
+            console.log(`✅ Migration v${migration.version} completed`);
+            console.log('');
+          } catch (error) {
+            console.error(`❌ Migration v${migration.version} failed:`, error.message);
+            throw error;
+          }
+        }
+      }
+    } else {
+      console.log('✅ Database is up to date');
+      console.log('');
+    }
+
+    // Create default data (always run)
+    await createDefaultData(client);
+
     console.log('');
     console.log('🎉 Database initialization complete!');
     console.log('');
+
   } catch (error) {
     console.error('❌ Database initialization error:', error.message);
     console.error(error.stack);
@@ -441,4 +584,12 @@ const initializeDatabase = async () => {
   }
 };
 
-module.exports = { initializeDatabase };
+// Auto-run if called directly
+if (require.main === module) {
+  initializeDatabase().catch(console.error);
+}
+
+module.exports = { 
+  initializeDatabase,
+  getCurrentVersion 
+};
