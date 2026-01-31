@@ -477,7 +477,7 @@ const createV5Triggers = async (client) => {
   await recordMigration(client, 5, 'Added audit triggers for updated_at columns');
 };
 
-// Create super admin and default data
+// Create super admin and default data - FIXED VERSION
 const createDefaultData = async (client) => {
   console.log('📥 Creating default data...');
 
@@ -524,25 +524,87 @@ const createDefaultData = async (client) => {
     console.log('⚠️ Super admin not configured. Set SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD in environment.');
   }
 
-  // Create default categories if none exist
-  const categoryCount = await client.query('SELECT COUNT(*) as count FROM categories WHERE business_id IS NULL');
-  if (parseInt(categoryCount.rows[0].count) === 0) {
-    const defaultCategories = [
-      { name: 'Antibiotics', description: 'Medications that fight bacterial infections' },
-      { name: 'Pain Relief', description: 'Medications for pain management' },
-      { name: 'Vitamins & Supplements', description: 'Nutritional supplements and vitamins' },
-      { name: 'First Aid', description: 'Basic first aid supplies' },
-      { name: 'Skin Care', description: 'Skin care products and medications' }
-    ];
+  // Create default categories - FIXED: Check table exists first, then insert
+  try {
+    console.log('📁 Checking for categories table...');
+    
+    // First check if categories table exists at all
+    const tableCheck = await client.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_schema = $1 
+        AND table_name = 'categories'
+      )
+    `, [config.schema]);
 
-    for (const cat of defaultCategories) {
-      const catId = uuidv4();
-      await client.query(
-        'INSERT INTO categories (id, business_id, name, description) VALUES ($1, NULL, $2, $3) ON CONFLICT DO NOTHING',
-        [catId, cat.name, cat.description]
-      );
+    if (!tableCheck.rows[0]?.exists) {
+      console.log('⚠️ Categories table does not exist yet, skipping default categories');
+      return;
     }
-    console.log('✅ Default categories created');
+
+    // Check if any categories exist (with or without business_id)
+    let categoryCount;
+    
+    // Try to query with business_id first
+    try {
+      categoryCount = await client.query(`
+        SELECT COUNT(*) as count FROM categories
+      `);
+    } catch (queryError) {
+      // If that fails, table might not have business_id yet or might be empty
+      console.log('⚠️ Could not query categories table, skipping default categories');
+      return;
+    }
+
+    if (parseInt(categoryCount.rows[0].count) === 0) {
+      console.log('📝 Creating default categories...');
+      
+      const defaultCategories = [
+        { name: 'Antibiotics', description: 'Medications that fight bacterial infections' },
+        { name: 'Pain Relief', description: 'Medications for pain management' },
+        { name: 'Vitamins & Supplements', description: 'Nutritional supplements and vitamins' },
+        { name: 'First Aid', description: 'Basic first aid supplies' },
+        { name: 'Skin Care', description: 'Skin care products and medications' }
+      ];
+
+      // Check if business_id column exists
+      const columnCheck = await client.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.columns 
+          WHERE table_schema = $1 
+          AND table_name = 'categories' 
+          AND column_name = 'business_id'
+        )
+      `, [config.schema]);
+
+      const hasBusinessIdColumn = columnCheck.rows[0]?.exists;
+
+      for (const cat of defaultCategories) {
+        const catId = uuidv4();
+        
+        if (hasBusinessIdColumn) {
+          // Insert with business_id column
+          await client.query(`
+            INSERT INTO categories (id, business_id, name, description) 
+            VALUES ($1, NULL, $2, $3) 
+            ON CONFLICT (business_id, name) DO NOTHING
+          `, [catId, cat.name, cat.description]);
+        } else {
+          // Insert without business_id column (backward compatibility)
+          await client.query(`
+            INSERT INTO categories (id, name, description) 
+            VALUES ($1, $2, $3) 
+            ON CONFLICT (name) DO NOTHING
+          `, [catId, cat.name, cat.description]);
+        }
+      }
+      console.log('✅ Default categories created');
+    } else {
+      console.log('✅ Categories already exist, skipping default creation');
+    }
+  } catch (error) {
+    console.warn('⚠️ Could not create default categories:', error.message);
+    // Don't throw error here, just log it
   }
 };
 
