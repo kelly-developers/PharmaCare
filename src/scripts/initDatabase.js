@@ -54,6 +54,28 @@ const createSchema = async (client) => {
 const createV1Tables = async (client) => {
   console.log('📋 Creating v1 tables (initial schema)...');
 
+  // Businesses table (master list in public schema)
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS businesses (
+      id VARCHAR(36) PRIMARY KEY,
+      name VARCHAR(255) NOT NULL,
+      email VARCHAR(255) UNIQUE NOT NULL,
+      phone VARCHAR(50),
+      business_type VARCHAR(20) NOT NULL CHECK (business_type IN ('pharmacy', 'general', 'supermarket', 'retail')),
+      schema_name VARCHAR(63) UNIQUE NOT NULL,
+      address TEXT,
+      city VARCHAR(100),
+      country VARCHAR(100),
+      logo TEXT,
+      subscription_plan VARCHAR(20) DEFAULT 'basic' CHECK (subscription_plan IN ('free', 'basic', 'premium', 'enterprise')),
+      status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('active', 'inactive', 'suspended', 'pending')),
+      suspension_reason TEXT,
+      owner_id VARCHAR(36),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
   // Users table
   await client.query(`
     CREATE TABLE IF NOT EXISTS users (
@@ -63,8 +85,9 @@ const createV1Tables = async (client) => {
       password VARCHAR(255) NOT NULL,
       name VARCHAR(100) NOT NULL,
       phone VARCHAR(50),
-      role VARCHAR(20) DEFAULT 'CASHIER' CHECK (role IN ('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER')),
+      role VARCHAR(20) DEFAULT 'CASHIER' CHECK (role IN ('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER', 'SUPER_ADMIN')),
       active BOOLEAN DEFAULT TRUE,
+      business_id VARCHAR(36) REFERENCES businesses(id),
       last_login TIMESTAMP,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
@@ -448,7 +471,36 @@ const createV5Triggers = async (client) => {
 const createDefaultData = async (client) => {
   console.log('📥 Creating default data...');
 
-  // Create admin user if enabled
+  // Create super admin user if enabled
+  const superAdminEmail = process.env.SUPER_ADMIN_EMAIL;
+  const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD;
+  const superAdminName = process.env.SUPER_ADMIN_NAME || 'Super Administrator';
+
+  if (superAdminEmail && superAdminPassword) {
+    console.log('👑 Checking super admin user...');
+    
+    const existingSuperAdmin = await client.query(
+      "SELECT id FROM users WHERE email = $1",
+      [superAdminEmail]
+    );
+
+    if (existingSuperAdmin.rows.length === 0) {
+      const id = uuidv4();
+      const username = 'superadmin';
+      const hashedPassword = await bcrypt.hash(superAdminPassword, 12);
+
+      await client.query(`
+        INSERT INTO users (id, username, email, password, name, role, active)
+        VALUES ($1, $2, $3, $4, $5, 'SUPER_ADMIN', true)
+      `, [id, username, superAdminEmail, hashedPassword, superAdminName]);
+
+      console.log('✅ Super admin user created');
+    } else {
+      console.log('✅ Super admin user already exists');
+    }
+  }
+
+  // Create admin user if enabled (for backward compatibility)
   if (process.env.ADMIN_ENABLED === 'true') {
     console.log('👤 Checking admin user...');
     

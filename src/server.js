@@ -17,6 +17,7 @@ const prescriptionRoutes = require('./routes/prescriptions');
 const purchaseOrderRoutes = require('./routes/purchaseOrders');
 const employeeRoutes = require('./routes/employees');
 const reportRoutes = require('./routes/reports');
+const businessRoutes = require('./routes/businesses');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -77,6 +78,7 @@ app.use('/api/prescriptions', prescriptionRoutes);
 app.use('/api/purchase-orders', purchaseOrderRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/reports', reportRoutes);
+app.use('/api/businesses', businessRoutes);
 
 // Error handling middleware
 app.use(errorHandler);
@@ -118,6 +120,7 @@ const startServer = async () => {
       console.log(`  PO:           /api/purchase-orders/*`);
       console.log(`  Employees:    /api/employees/*`);
       console.log(`  Reports:      /api/reports/*`);
+      console.log(`  Businesses:   /api/businesses/* (Super Admin)`);
       console.log('');
     });
   } catch (error) {

@@ -28,7 +28,7 @@ const authenticate = async (req, res, next) => {
 
     // Get user from database
     const [users] = await query(
-      'SELECT id, username, email, role, active FROM users WHERE id = $1',
+      'SELECT id, username, email, role, active, business_id FROM users WHERE id = $1',
       [decoded.userId]
     );
 
@@ -130,9 +130,92 @@ const isStaff = (req, res, next) => {
   next();
 };
 
+// Super Admin middleware - checks environment-based super admin
+const isSuperAdmin = async (req, res, next) => {
+  if (!req.user) {
+    return res.status(401).json({ 
+      success: false, 
+      error: 'Not authenticated' 
+    });
+  }
+
+  // Check if user is the super admin (from env vars)
+  const superAdminEmail = process.env.SUPER_ADMIN_EMAIL;
+  
+  if (!superAdminEmail) {
+    return res.status(403).json({ 
+      success: false, 
+      error: 'Super admin not configured' 
+    });
+  }
+
+  if (req.user.email !== superAdminEmail) {
+    return res.status(403).json({ 
+      success: false, 
+      error: 'Super admin access required' 
+    });
+  }
+
+  next();
+};
+
+// Tenant middleware - sets search path based on user's business
+const setTenantContext = async (req, res, next) => {
+  try {
+    if (!req.user || !req.user.business_id) {
+      return next(); // No tenant context needed
+    }
+
+    // Get business schema
+    const [businesses] = await query(
+      'SELECT schema_name, status FROM businesses WHERE id = $1',
+      [req.user.business_id]
+    );
+
+    if (businesses.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'BUSINESS_NOT_FOUND',
+        message: 'Associated business not found'
+      });
+    }
+
+    const business = businesses[0];
+
+    if (business.status === 'suspended') {
+      return res.status(403).json({
+        success: false,
+        error: 'BUSINESS_SUSPENDED',
+        message: 'This business account has been suspended'
+      });
+    }
+
+    if (business.status === 'inactive') {
+      return res.status(403).json({
+        success: false,
+        error: 'BUSINESS_INACTIVE',
+        message: 'This business account is inactive'
+      });
+    }
+
+    // Store tenant info in request
+    req.tenant = {
+      businessId: req.user.business_id,
+      schemaName: business.schema_name
+    };
+
+    next();
+  } catch (error) {
+    console.error('Tenant context error:', error);
+    next(error);
+  }
+};
+
 module.exports = { 
   authenticate, 
   authorize, 
   isAdmin, 
-  isStaff 
+  isStaff,
+  isSuperAdmin,
+  setTenantContext
 };

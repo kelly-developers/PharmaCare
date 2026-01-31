@@ -1,15 +1,18 @@
-# PharmaCare Backend API
+# PharmaCare Multi-Tenant Backend API
 
-A complete Node.js/Express backend for the PharmaCare Pharmacy Management System with PostgreSQL.
+A complete Node.js/Express backend for the PharmaCare Multi-Tenant Business Management System with PostgreSQL.
 
 ## Features
 
 - 🔐 JWT Authentication with role-based access control
+- 👑 **Super Admin** for platform-wide business management
+- 🏢 **Multi-Tenant Architecture** with schema isolation per business
+- 🏪 Support for multiple business types: Pharmacy, General Store, Supermarket, Retail
 - 👥 User Management (ADMIN, MANAGER, PHARMACIST, CASHIER roles)
 - 💊 Medicine & Category Management with product types and units
 - 📦 Stock Management with movement tracking
 - 💰 Sales & POS functionality
-- 📋 Prescription Management
+- 📋 Prescription Management (Pharmacy only)
 - 📝 Expense Tracking with approval workflow
 - 🏢 Supplier Management
 - 📦 Purchase Order Management
@@ -46,19 +49,24 @@ npm start
 
 Set these in your Render dashboard:
 
-| Variable | Example Value |
-|----------|---------------|
-| `DATASOURCE_URL` | `jdbc:postgresql://host:5432/db?currentSchema=myschema` |
-| `DATASOURCE_USER` | `your_db_user` |
-| `DATASOURCE_PASSWORD` | `your_db_password` |
-| `DB_SCHEMA` | `spotmedpharmacare` |
-| `JWT_SECRET` | `your-secure-jwt-secret-key` |
-| `ALLOWED_ORIGINS` | `https://your-frontend.netlify.app` |
-| `ADMIN_ENABLED` | `true` |
-| `ADMIN_EMAIL` | `admin@example.com` |
-| `ADMIN_PASSWORD` | `SecurePassword123` |
-| `ADMIN_NAME` | `System Administrator` |
-| `ADMIN_PHONE` | `+254700000000` |
+| Variable | Example Value | Description |
+|----------|---------------|-------------|
+| `DATASOURCE_URL` | `jdbc:postgresql://host:5432/db?currentSchema=myschema` | PostgreSQL connection URL |
+| `DATASOURCE_USER` | `your_db_user` | Database user |
+| `DATASOURCE_PASSWORD` | `your_db_password` | Database password |
+| `DB_SCHEMA` | `spotmedpharmacare` | Main schema name |
+| `JWT_SECRET` | `your-secure-jwt-secret-key` | JWT signing secret |
+| `ALLOWED_ORIGINS` | `https://your-frontend.netlify.app` | Allowed CORS origins |
+| **Super Admin (Required)** | | |
+| `SUPER_ADMIN_EMAIL` | `superadmin@system.com` | Super admin email |
+| `SUPER_ADMIN_PASSWORD` | `SuperSecure123!` | Super admin password |
+| `SUPER_ADMIN_NAME` | `Super Administrator` | Super admin display name |
+| **Regular Admin (Optional)** | | |
+| `ADMIN_ENABLED` | `true` | Enable admin user creation |
+| `ADMIN_EMAIL` | `admin@example.com` | Admin email |
+| `ADMIN_PASSWORD` | `SecurePassword123` | Admin password |
+| `ADMIN_NAME` | `System Administrator` | Admin display name |
+| `ADMIN_PHONE` | `+254700000000` | Admin phone |
 
 ### Render Configuration
 
@@ -74,54 +82,88 @@ See [docs/API_ENDPOINTS.md](docs/API_ENDPOINTS.md) for complete API documentatio
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /api/auth/login` | User login |
+| `POST /api/auth/login` | User login (returns business context) |
+| **Business Management (Super Admin)** | |
+| `GET /api/businesses` | List all businesses |
+| `POST /api/businesses` | Create new business with schema |
+| `GET /api/businesses/stats` | Business statistics |
+| `POST /api/businesses/:id/activate` | Activate business |
+| `POST /api/businesses/:id/suspend` | Suspend business |
+| **Medicine Management** | |
 | `GET /api/medicines` | List medicines |
-| `POST /api/medicines` | Create medicine (with batch_number, expiry_date, cost_price, stock_quantity) |
+| `POST /api/medicines` | Create medicine |
 | `POST /api/medicines/:id/add-stock` | Add stock to medicine |
+| **Sales & POS** | |
 | `POST /api/sales` | Create sale (POS) |
 | `POST /api/purchase-orders` | Create purchase order |
-| `PATCH /api/purchase-orders/:id/receive` | Receive order (auto-adds stock) |
+| `PATCH /api/purchase-orders/:id/receive` | Receive order |
+| **Reports** | |
 | `GET /api/reports/dashboard` | Dashboard summary |
 
-## Medicine Creation Example
+## Multi-Tenant Architecture
+
+Each business operates in its own PostgreSQL schema for complete data isolation:
+
+1. **Super Admin** creates a new business via `POST /api/businesses`
+2. System creates a new schema (e.g., `abc_pharmacy`) and required tables
+3. Business admin is created within that schema
+4. All subsequent API calls operate within the business's schema context
+
+### Business Types
+
+| Type | Features |
+|------|----------|
+| `pharmacy` | Medicines, Prescriptions, Batch/Expiry tracking |
+| `general` | Products, Barcode, Standard POS |
+| `supermarket` | Products, Barcode, Bulk inventory |
+| `retail` | Products, Barcode, Standard POS |
+
+## Create Business Example
 
 ```json
-POST /api/medicines
+POST /api/businesses
+Authorization: Bearer <super_admin_token>
+
 {
-  "name": "Paracetamol 500mg",
-  "category": "Tablets",
-  "manufacturer": "Pharma Co",
-  "unit_price": 10.00,
-  "cost_price": 5.00,
-  "stock_quantity": 100,
-  "reorder_level": 20,
-  "expiry_date": "2025-12-31",
-  "batch_number": "BATCH001",
-  "product_type": "Tablets",
-  "units": [
-    { "id": "1", "type": "Box", "label": "Box (100 tablets)", "quantity": 100, "price": 500 },
-    { "id": "2", "type": "Strip", "label": "Strip (10 tablets)", "quantity": 10, "price": 60 }
-  ]
+  "name": "ABC Pharmacy",
+  "email": "abc@pharmacy.com",
+  "phone": "+254712345678",
+  "businessType": "pharmacy",
+  "schemaName": "abc_pharmacy",
+  "address": "123 Main St",
+  "city": "Nairobi",
+  "country": "Kenya",
+  "adminName": "John Doe",
+  "adminEmail": "john@abcpharmacy.com",
+  "adminPassword": "securePassword123"
 }
 ```
 
-## Adding Stock Example
+## Login Response (with Business Context)
 
 ```json
-POST /api/medicines/:id/add-stock
 {
-  "quantity": 50,
-  "batch_number": "BATCH002",
-  "notes": "New shipment"
+  "success": true,
+  "data": {
+    "token": "eyJhbGciOiJIUzI1NiJ9...",
+    "refreshToken": "eyJhbGciOiJIUzI1NiJ9...",
+    "user": {
+      "id": "user_456",
+      "name": "John Doe",
+      "email": "john@abcpharmacy.com",
+      "role": "ADMIN",
+      "business_id": "bus_123"
+    },
+    "business": {
+      "id": "bus_123",
+      "name": "ABC Pharmacy",
+      "businessType": "pharmacy",
+      "schemaName": "abc_pharmacy",
+      "status": "active"
+    }
+  }
 }
 ```
-
-## Purchase Order Workflow
-
-1. Create order: `POST /api/purchase-orders`
-2. Submit: `PATCH /api/purchase-orders/:id/submit`
-3. Approve: `PATCH /api/purchase-orders/:id/approve`
-4. Receive (auto-adds stock): `PATCH /api/purchase-orders/:id/receive`
 
 ## Scripts
 

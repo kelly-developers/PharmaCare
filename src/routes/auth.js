@@ -11,7 +11,7 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'your-refresh-secret';
 const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
 
-// POST /api/auth/login - UPDATED to accept both email and username
+// POST /api/auth/login - UPDATED to accept both email and username and return business context
 router.post('/login', async (req, res, next) => {
   try {
     const { username, email, password } = req.body;
@@ -55,17 +55,53 @@ router.post('/login', async (req, res, next) => {
       });
     }
 
-    // Generate access token
-    const accessToken = jwt.sign(
-      { 
-        userId: user.id, 
-        username: user.username, 
-        email: user.email,
-        role: user.role 
-      },
-      JWT_SECRET,
-      { expiresIn: JWT_EXPIRES_IN }
-    );
+    // Get business info if user has a business_id
+    let businessInfo = null;
+    if (user.business_id) {
+      const [businesses] = await query(
+        'SELECT id, name, business_type, schema_name, status FROM businesses WHERE id = $1',
+        [user.business_id]
+      );
+
+      if (businesses.length > 0) {
+        const business = businesses[0];
+        
+        // Check if business is suspended or inactive
+        if (business.status === 'suspended') {
+          return res.status(403).json({
+            success: false,
+            error: 'Your business account has been suspended. Please contact support.'
+          });
+        }
+        
+        if (business.status === 'inactive') {
+          return res.status(403).json({
+            success: false,
+            error: 'Your business account is inactive. Please contact support.'
+          });
+        }
+
+        businessInfo = {
+          id: business.id,
+          name: business.name,
+          businessType: business.business_type,
+          schemaName: business.schema_name,
+          status: business.status
+        };
+      }
+    }
+
+    // Generate access token with business info
+    const tokenPayload = { 
+      userId: user.id, 
+      username: user.username, 
+      email: user.email,
+      role: user.role,
+      businessId: user.business_id || null,
+      schemaName: businessInfo?.schemaName || null
+    };
+
+    const accessToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
 
     // Generate refresh token
     const refreshToken = jwt.sign(
@@ -86,13 +122,21 @@ router.post('/login', async (req, res, next) => {
     // Remove password from user object
     const { password: _, ...userWithoutPassword } = user;
 
+    // Build response
+    const responseData = {
+      token: accessToken,
+      refreshToken,
+      user: userWithoutPassword
+    };
+
+    // Include business info if available
+    if (businessInfo) {
+      responseData.business = businessInfo;
+    }
+
     res.json({
       success: true,
-      data: {
-        token: accessToken,
-        refreshToken,
-        user: userWithoutPassword
-      }
+      data: responseData
     });
   } catch (error) {
     next(error);
