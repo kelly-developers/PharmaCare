@@ -11,7 +11,24 @@ const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || '24h';
 const JWT_REFRESH_SECRET = process.env.JWT_REFRESH_SECRET || 'your-refresh-secret';
 const JWT_REFRESH_EXPIRES_IN = process.env.JWT_REFRESH_EXPIRES_IN || '7d';
 
-// POST /api/auth/login - UPDATED to accept both email and username and return business context
+/**
+ * POST /api/auth/login
+ * 
+ * Universal login endpoint for all user types:
+ * - Super Admin (no business_id, role = 'SUPER_ADMIN')
+ * - Business Admin (has business_id, role = 'ADMIN')
+ * - Business Staff (has business_id, role in ['MANAGER', 'PHARMACIST', 'CASHIER'])
+ * 
+ * Request body:
+ * {
+ *   "email": "user@example.com" OR "username": "username",
+ *   "password": "password123"
+ * }
+ * 
+ * Response includes user type indicator for frontend routing:
+ * - isSuperAdmin: true/false
+ * - business: null for super admin, business object for business users
+ */
 router.post('/login', async (req, res, next) => {
   try {
     const { username, email, password } = req.body;
@@ -22,7 +39,7 @@ router.post('/login', async (req, res, next) => {
     if (!loginIdentifier || !password) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Username/Email and password are required' 
+        error: 'Email/Username and password are required' 
       });
     }
 
@@ -55,11 +72,14 @@ router.post('/login', async (req, res, next) => {
       });
     }
 
+    // Check if user is Super Admin
+    const isSuperAdmin = user.role === 'SUPER_ADMIN';
+
     // Get business info if user has a business_id
     let businessInfo = null;
-    if (user.business_id) {
+    if (user.business_id && !isSuperAdmin) {
       const [businesses] = await query(
-        'SELECT id, name, business_type, schema_name, status FROM businesses WHERE id = $1',
+        'SELECT id, name, business_type, status, subscription_plan, logo FROM businesses WHERE id = $1',
         [user.business_id]
       );
 
@@ -70,14 +90,24 @@ router.post('/login', async (req, res, next) => {
         if (business.status === 'suspended') {
           return res.status(403).json({
             success: false,
-            error: 'Your business account has been suspended. Please contact support.'
+            error: 'BUSINESS_SUSPENDED',
+            message: 'Your business account has been suspended. Please contact support.'
           });
         }
         
         if (business.status === 'inactive') {
           return res.status(403).json({
             success: false,
-            error: 'Your business account is inactive. Please contact support.'
+            error: 'BUSINESS_INACTIVE',
+            message: 'Your business account is inactive. Please contact support.'
+          });
+        }
+
+        if (business.status === 'pending') {
+          return res.status(403).json({
+            success: false,
+            error: 'BUSINESS_PENDING',
+            message: 'Your business account is pending activation. Please wait for approval.'
           });
         }
 
@@ -85,20 +115,21 @@ router.post('/login', async (req, res, next) => {
           id: business.id,
           name: business.name,
           businessType: business.business_type,
-          schemaName: business.schema_name,
-          status: business.status
+          status: business.status,
+          subscriptionPlan: business.subscription_plan,
+          logo: business.logo
         };
       }
     }
 
-    // Generate access token with business info
+    // Generate access token
     const tokenPayload = { 
       userId: user.id, 
       username: user.username, 
       email: user.email,
       role: user.role,
       businessId: user.business_id || null,
-      schemaName: businessInfo?.schemaName || null
+      isSuperAdmin
     };
 
     const accessToken = jwt.sign(tokenPayload, JWT_SECRET, { expiresIn: JWT_EXPIRES_IN });
@@ -126,13 +157,13 @@ router.post('/login', async (req, res, next) => {
     const responseData = {
       token: accessToken,
       refreshToken,
-      user: userWithoutPassword
+      user: {
+        ...userWithoutPassword,
+        isSuperAdmin
+      },
+      // Include business info for business users, null for super admin
+      business: businessInfo
     };
-
-    // Include business info if available
-    if (businessInfo) {
-      responseData.business = businessInfo;
-    }
 
     res.json({
       success: true,
@@ -143,10 +174,15 @@ router.post('/login', async (req, res, next) => {
   }
 });
 
-// POST /api/auth/register
+/**
+ * POST /api/auth/register
+ * 
+ * Self-registration endpoint (for public signups)
+ * Creates a user without a business (they can be added to a business later)
+ */
 router.post('/register', async (req, res, next) => {
   try {
-    const { username, email, password, name, role = 'CASHIER', phone } = req.body;
+    const { username, email, password, name, phone } = req.body;
 
     if (!username || !email || !password || !name) {
       return res.status(400).json({ 
@@ -161,6 +197,14 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ 
         success: false, 
         error: 'Invalid email format' 
+      });
+    }
+
+    // Password validation
+    if (password.length < 6) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Password must be at least 6 characters' 
       });
     }
 
@@ -180,15 +224,16 @@ router.post('/register', async (req, res, next) => {
     const hashedPassword = await bcrypt.hash(password, 12);
     const id = uuidv4();
 
+    // Create user without business_id (public registration)
     await query(
-      `INSERT INTO users (id, username, email, password, name, role, phone, active, created_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, true, CURRENT_TIMESTAMP)`,
-      [id, username, email, hashedPassword, name, role, phone || null]
+      `INSERT INTO users (id, username, email, password, name, phone, role, active, business_id, created_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, 'CASHIER', true, NULL, CURRENT_TIMESTAMP)`,
+      [id, username, email, hashedPassword, name, phone || null]
     );
 
     // Generate tokens
     const accessToken = jwt.sign(
-      { userId: id, username, email, role },
+      { userId: id, username, email, role: 'CASHIER', businessId: null, isSuperAdmin: false },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
     );
@@ -209,10 +254,13 @@ router.post('/register', async (req, res, next) => {
           username, 
           email, 
           name, 
-          role, 
+          role: 'CASHIER', 
           phone: phone || null,
-          active: true 
-        }
+          active: true,
+          businessId: null,
+          isSuperAdmin: false
+        },
+        business: null
       }
     });
   } catch (error) {
@@ -220,11 +268,15 @@ router.post('/register', async (req, res, next) => {
   }
 });
 
-// GET /api/auth/me - Get current user profile
+/**
+ * GET /api/auth/me
+ * Get current user profile with business info
+ */
 router.get('/me', authenticate, async (req, res, next) => {
   try {
     const [users] = await query(
-      'SELECT id, username, email, name, role, phone, active, created_at, last_login FROM users WHERE id = $1',
+      `SELECT id, username, email, name, role, phone, active, business_id, avatar, created_at, last_login 
+       FROM users WHERE id = $1`,
       [req.user.id]
     );
 
@@ -235,26 +287,55 @@ router.get('/me', authenticate, async (req, res, next) => {
       });
     }
 
+    const user = users[0];
+    const isSuperAdmin = user.role === 'SUPER_ADMIN';
+
+    // Get business info if applicable
+    let businessInfo = null;
+    if (user.business_id && !isSuperAdmin) {
+      const [businesses] = await query(
+        'SELECT id, name, business_type, status, subscription_plan, logo FROM businesses WHERE id = $1',
+        [user.business_id]
+      );
+      if (businesses.length > 0) {
+        businessInfo = {
+          id: businesses[0].id,
+          name: businesses[0].name,
+          businessType: businesses[0].business_type,
+          status: businesses[0].status,
+          subscriptionPlan: businesses[0].subscription_plan,
+          logo: businesses[0].logo
+        };
+      }
+    }
+
     res.json({
       success: true,
-      data: users[0]
+      data: {
+        ...user,
+        isSuperAdmin,
+        business: businessInfo
+      }
     });
   } catch (error) {
     next(error);
   }
 });
 
-// POST /api/auth/logout
+/**
+ * POST /api/auth/logout
+ */
 router.post('/logout', authenticate, (req, res) => {
-  // In a stateless JWT system, client just removes the token
-  // For refresh token invalidation, you might want to implement a blacklist
   res.json({ 
     success: true, 
     message: 'Logged out successfully' 
   });
 });
 
-// POST /api/auth/refresh - Refresh access token
+/**
+ * POST /api/auth/refresh
+ * Refresh access token using refresh token
+ */
 router.post('/refresh', async (req, res, next) => {
   try {
     const { refreshToken } = req.body;
@@ -278,7 +359,7 @@ router.post('/refresh', async (req, res, next) => {
 
     // Get user from database
     const [users] = await query(
-      'SELECT id, username, email, role, active FROM users WHERE id = $1',
+      'SELECT id, username, email, role, active, business_id FROM users WHERE id = $1',
       [decoded.userId]
     );
 
@@ -298,13 +379,17 @@ router.post('/refresh', async (req, res, next) => {
       });
     }
 
+    const isSuperAdmin = user.role === 'SUPER_ADMIN';
+
     // Generate new access token
     const newAccessToken = jwt.sign(
       { 
         userId: user.id, 
         username: user.username, 
         email: user.email,
-        role: user.role 
+        role: user.role,
+        businessId: user.business_id,
+        isSuperAdmin
       },
       JWT_SECRET,
       { expiresIn: JWT_EXPIRES_IN }
@@ -333,7 +418,9 @@ router.post('/refresh', async (req, res, next) => {
   }
 });
 
-// POST /api/auth/change-password
+/**
+ * POST /api/auth/change-password
+ */
 router.post('/change-password', authenticate, async (req, res, next) => {
   try {
     const { currentPassword, newPassword } = req.body;
@@ -395,7 +482,9 @@ router.post('/change-password', authenticate, async (req, res, next) => {
   }
 });
 
-// POST /api/auth/forgot-password
+/**
+ * POST /api/auth/forgot-password
+ */
 router.post('/forgot-password', async (req, res, next) => {
   try {
     const { email } = req.body;
@@ -429,8 +518,6 @@ router.post('/forgot-password', async (req, res, next) => {
       { expiresIn: '1h' }
     );
 
-    // In a real app, you would send an email here
-    // For now, we'll just return the token (in development)
     const resetLink = `${process.env.FRONTEND_URL}/reset-password?token=${resetToken}`;
 
     // TODO: Send email with resetLink
@@ -447,7 +534,9 @@ router.post('/forgot-password', async (req, res, next) => {
   }
 });
 
-// POST /api/auth/reset-password
+/**
+ * POST /api/auth/reset-password
+ */
 router.post('/reset-password', async (req, res, next) => {
   try {
     const { token, newPassword } = req.body;

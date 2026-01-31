@@ -3,7 +3,9 @@ const { query } = require('../config/database');
 
 const JWT_SECRET = process.env.JWT_SECRET || process.env.APPLICATION_SECURITY_JWT_SECRET_KEY || 'your-secret-key';
 
-// Verify JWT token
+/**
+ * Verify JWT token and attach user to request
+ */
 const authenticate = async (req, res, next) => {
   try {
     const authHeader = req.headers.authorization;
@@ -70,7 +72,10 @@ const authenticate = async (req, res, next) => {
   }
 };
 
-// Role-based authorization
+/**
+ * Role-based authorization
+ * Usage: authorize('ADMIN', 'MANAGER')
+ */
 const authorize = (...roles) => {
   return (req, res, next) => {
     if (!req.user) {
@@ -78,6 +83,11 @@ const authorize = (...roles) => {
         success: false, 
         error: 'Not authenticated' 
       });
+    }
+
+    // Super Admin has access to everything
+    if (req.user.role === 'SUPER_ADMIN') {
+      return next();
     }
 
     if (!roles.includes(req.user.role)) {
@@ -91,7 +101,9 @@ const authorize = (...roles) => {
   };
 };
 
-// Admin-only middleware
+/**
+ * Admin-only middleware (Business Admin or Super Admin)
+ */
 const isAdmin = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ 
@@ -100,7 +112,7 @@ const isAdmin = (req, res, next) => {
     });
   }
 
-  if (req.user.role !== 'ADMIN') {
+  if (req.user.role !== 'ADMIN' && req.user.role !== 'SUPER_ADMIN') {
     return res.status(403).json({ 
       success: false, 
       error: 'Admin access required' 
@@ -110,7 +122,9 @@ const isAdmin = (req, res, next) => {
   next();
 };
 
-// Staff middleware (Admin, Manager, Pharmacist)
+/**
+ * Staff middleware (Admin, Manager, Pharmacist)
+ */
 const isStaff = (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ 
@@ -119,7 +133,7 @@ const isStaff = (req, res, next) => {
     });
   }
 
-  const staffRoles = ['ADMIN', 'MANAGER', 'PHARMACIST'];
+  const staffRoles = ['ADMIN', 'MANAGER', 'PHARMACIST', 'SUPER_ADMIN'];
   if (!staffRoles.includes(req.user.role)) {
     return res.status(403).json({ 
       success: false, 
@@ -130,7 +144,9 @@ const isStaff = (req, res, next) => {
   next();
 };
 
-// Super Admin middleware - checks environment-based super admin
+/**
+ * Super Admin middleware - checks if user has SUPER_ADMIN role
+ */
 const isSuperAdmin = async (req, res, next) => {
   if (!req.user) {
     return res.status(401).json({ 
@@ -139,17 +155,7 @@ const isSuperAdmin = async (req, res, next) => {
     });
   }
 
-  // Check if user is the super admin (from env vars)
-  const superAdminEmail = process.env.SUPER_ADMIN_EMAIL;
-  
-  if (!superAdminEmail) {
-    return res.status(403).json({ 
-      success: false, 
-      error: 'Super admin not configured' 
-    });
-  }
-
-  if (req.user.email !== superAdminEmail) {
+  if (req.user.role !== 'SUPER_ADMIN') {
     return res.status(403).json({ 
       success: false, 
       error: 'Super admin access required' 
@@ -159,16 +165,37 @@ const isSuperAdmin = async (req, res, next) => {
   next();
 };
 
-// Tenant middleware - sets search path based on user's business
-const setTenantContext = async (req, res, next) => {
+/**
+ * Business context middleware - ensures user has access to business data
+ * Attaches business info to request for queries to filter by business_id
+ */
+const requireBusinessContext = async (req, res, next) => {
   try {
-    if (!req.user || !req.user.business_id) {
-      return next(); // No tenant context needed
+    if (!req.user) {
+      return res.status(401).json({ 
+        success: false, 
+        error: 'Not authenticated' 
+      });
     }
 
-    // Get business schema
+    // Super Admin can access all data (no business filter)
+    if (req.user.role === 'SUPER_ADMIN') {
+      req.businessId = null; // null means access to all
+      return next();
+    }
+
+    // Regular users must have a business_id
+    if (!req.user.business_id) {
+      return res.status(403).json({
+        success: false,
+        error: 'NO_BUSINESS_CONTEXT',
+        message: 'You are not associated with any business'
+      });
+    }
+
+    // Get business status
     const [businesses] = await query(
-      'SELECT schema_name, status FROM businesses WHERE id = $1',
+      'SELECT id, name, status FROM businesses WHERE id = $1',
       [req.user.business_id]
     );
 
@@ -198,15 +225,37 @@ const setTenantContext = async (req, res, next) => {
       });
     }
 
-    // Store tenant info in request
-    req.tenant = {
-      businessId: req.user.business_id,
-      schemaName: business.schema_name
-    };
+    if (business.status === 'pending') {
+      return res.status(403).json({
+        success: false,
+        error: 'BUSINESS_PENDING',
+        message: 'This business account is pending activation'
+      });
+    }
+
+    // Attach business info to request
+    req.businessId = req.user.business_id;
+    req.businessName = business.name;
 
     next();
   } catch (error) {
-    console.error('Tenant context error:', error);
+    console.error('Business context error:', error);
+    next(error);
+  }
+};
+
+/**
+ * Optional business context - doesn't fail if no business, just sets businessId
+ */
+const optionalBusinessContext = async (req, res, next) => {
+  try {
+    if (req.user && req.user.business_id) {
+      req.businessId = req.user.business_id;
+    } else {
+      req.businessId = null;
+    }
+    next();
+  } catch (error) {
     next(error);
   }
 };
@@ -217,5 +266,6 @@ module.exports = {
   isAdmin, 
   isStaff,
   isSuperAdmin,
-  setTenantContext
+  requireBusinessContext,
+  optionalBusinessContext
 };

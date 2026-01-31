@@ -2,29 +2,14 @@ const express = require('express');
 const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { query, pool, config } = require('../config/database');
-const { authenticate, isSuperAdmin } = require('../middleware/auth');
+const { authenticate, isSuperAdmin, authorize } = require('../middleware/auth');
 
 const router = express.Router();
-
-// Validate schema name (alphanumeric + underscore only)
-const isValidSchemaName = (name) => {
-  return /^[a-z][a-z0-9_]*$/.test(name) && name.length <= 63;
-};
-
-// Generate schema name from business name
-const generateSchemaName = (businessName) => {
-  return businessName
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '_')
-    .replace(/_+/g, '_')
-    .replace(/^_|_$/g, '')
-    .substring(0, 50);
-};
 
 // GET /api/businesses - List all businesses (Super Admin only)
 router.get('/', authenticate, isSuperAdmin, async (req, res, next) => {
   try {
-    const { page = 1, limit = 20, status, type } = req.query;
+    const { page = 1, limit = 20, status, type, search } = req.query;
     const offset = (parseInt(page) - 1) * parseInt(limit);
 
     let whereClause = '';
@@ -39,6 +24,10 @@ router.get('/', authenticate, isSuperAdmin, async (req, res, next) => {
       whereClause += ` AND business_type = $${paramIndex++}`;
       params.push(type);
     }
+    if (search) {
+      whereClause += ` AND (name ILIKE $${paramIndex} OR email ILIKE $${paramIndex++})`;
+      params.push(`%${search}%`);
+    }
 
     // Get total count
     const [countResult] = await query(
@@ -47,7 +36,7 @@ router.get('/', authenticate, isSuperAdmin, async (req, res, next) => {
     );
     const total = parseInt(countResult[0]?.total || 0);
 
-    // Get businesses
+    // Get businesses with user count
     params.push(parseInt(limit), offset);
     const [businesses] = await query(
       `SELECT b.*, 
@@ -82,11 +71,21 @@ router.get('/stats', authenticate, isSuperAdmin, async (req, res, next) => {
         COUNT(*) FILTER (WHERE status = 'active') as active_businesses,
         COUNT(*) FILTER (WHERE status = 'suspended') as suspended_businesses,
         COUNT(*) FILTER (WHERE status = 'inactive') as inactive_businesses,
+        COUNT(*) FILTER (WHERE status = 'pending') as pending_businesses,
         COUNT(*) FILTER (WHERE business_type = 'pharmacy') as pharmacy_count,
         COUNT(*) FILTER (WHERE business_type = 'general') as general_count,
         COUNT(*) FILTER (WHERE business_type = 'supermarket') as supermarket_count,
         COUNT(*) FILTER (WHERE business_type = 'retail') as retail_count
       FROM businesses
+    `);
+
+    // Get total users count
+    const [userStats] = await query(`
+      SELECT 
+        COUNT(*) as total_users,
+        COUNT(*) FILTER (WHERE role = 'ADMIN') as admin_count,
+        COUNT(*) FILTER (WHERE role != 'SUPER_ADMIN' AND business_id IS NOT NULL) as business_users
+      FROM users
     `);
 
     res.json({
@@ -96,39 +95,14 @@ router.get('/stats', authenticate, isSuperAdmin, async (req, res, next) => {
         activeBusinesses: parseInt(stats[0]?.active_businesses || 0),
         suspendedBusinesses: parseInt(stats[0]?.suspended_businesses || 0),
         inactiveBusinesses: parseInt(stats[0]?.inactive_businesses || 0),
+        pendingBusinesses: parseInt(stats[0]?.pending_businesses || 0),
         pharmacyCount: parseInt(stats[0]?.pharmacy_count || 0),
         generalCount: parseInt(stats[0]?.general_count || 0),
         supermarketCount: parseInt(stats[0]?.supermarket_count || 0),
-        retailCount: parseInt(stats[0]?.retail_count || 0)
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/businesses/check-schema/:schemaName - Check if schema name is available
-router.get('/check-schema/:schemaName', authenticate, isSuperAdmin, async (req, res, next) => {
-  try {
-    const { schemaName } = req.params;
-
-    if (!isValidSchemaName(schemaName)) {
-      return res.status(400).json({
-        success: false,
-        error: 'INVALID_SCHEMA_NAME',
-        message: 'Schema name must start with a letter and contain only lowercase letters, numbers, and underscores'
-      });
-    }
-
-    const [existing] = await query(
-      'SELECT id FROM businesses WHERE schema_name = $1',
-      [schemaName]
-    );
-
-    res.json({
-      success: true,
-      data: {
-        available: existing.length === 0
+        retailCount: parseInt(stats[0]?.retail_count || 0),
+        totalUsers: parseInt(userStats[0]?.total_users || 0),
+        adminCount: parseInt(userStats[0]?.admin_count || 0),
+        businessUsers: parseInt(userStats[0]?.business_users || 0)
       }
     });
   } catch (error) {
@@ -137,6 +111,7 @@ router.get('/check-schema/:schemaName', authenticate, isSuperAdmin, async (req, 
 });
 
 // POST /api/businesses - Create new business (Super Admin only)
+// NOTE: No schema is created - uses business_id for multi-tenancy
 router.post('/', authenticate, isSuperAdmin, async (req, res, next) => {
   const client = await pool.connect();
   
@@ -146,20 +121,20 @@ router.post('/', authenticate, isSuperAdmin, async (req, res, next) => {
       email,
       phone,
       businessType,
-      schemaName,
       address,
       city,
       country,
       adminName,
       adminEmail,
-      adminPassword
+      adminPassword,
+      subscriptionPlan = 'basic'
     } = req.body;
 
     // Validate required fields
-    if (!name || !email || !businessType || !schemaName || !adminName || !adminEmail || !adminPassword) {
+    if (!name || !email || !businessType || !adminName || !adminEmail || !adminPassword) {
       return res.status(400).json({
         success: false,
-        error: 'Missing required fields: name, email, businessType, schemaName, adminName, adminEmail, adminPassword'
+        error: 'Missing required fields: name, email, businessType, adminName, adminEmail, adminPassword'
       });
     }
 
@@ -172,85 +147,63 @@ router.post('/', authenticate, isSuperAdmin, async (req, res, next) => {
       });
     }
 
-    // Validate schema name
-    if (!isValidSchemaName(schemaName)) {
+    // Validate subscription plan
+    const validPlans = ['free', 'basic', 'premium', 'enterprise'];
+    if (!validPlans.includes(subscriptionPlan)) {
       return res.status(400).json({
         success: false,
-        error: 'INVALID_SCHEMA_NAME',
-        message: 'Schema name must start with a letter and contain only lowercase letters, numbers, and underscores'
-      });
-    }
-
-    // Check if schema already exists
-    const [existingSchema] = await query(
-      'SELECT id FROM businesses WHERE schema_name = $1',
-      [schemaName]
-    );
-
-    if (existingSchema.length > 0) {
-      return res.status(409).json({
-        success: false,
-        error: 'SCHEMA_EXISTS',
-        message: `A business with schema name '${schemaName}' already exists`
+        error: `Invalid subscription plan. Must be one of: ${validPlans.join(', ')}`
       });
     }
 
     // Check if business email already exists
-    const [existingEmail] = await query(
+    const [existingBusiness] = await query(
       'SELECT id FROM businesses WHERE email = $1',
       [email]
     );
 
-    if (existingEmail.length > 0) {
+    if (existingBusiness.length > 0) {
       return res.status(409).json({
         success: false,
-        error: 'EMAIL_EXISTS',
+        error: 'BUSINESS_EMAIL_EXISTS',
         message: 'A business with this email already exists'
+      });
+    }
+
+    // Check if admin email already exists
+    const [existingAdmin] = await query(
+      'SELECT id FROM users WHERE email = $1',
+      [adminEmail]
+    );
+
+    if (existingAdmin.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: 'ADMIN_EMAIL_EXISTS',
+        message: 'A user with this admin email already exists'
       });
     }
 
     await client.query('BEGIN');
 
-    // Set search path to main schema for business creation
-    await client.query(`SET search_path TO ${config.schema}, public`);
-
-    // Create business record
+    // Create business record (auto-generated UUID as business_id)
     const businessId = uuidv4();
     await client.query(
       `INSERT INTO businesses (
-        id, name, email, phone, business_type, schema_name, 
-        address, city, country, status, created_at
+        id, name, email, phone, business_type, 
+        address, city, country, subscription_plan, status, created_at
       ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', CURRENT_TIMESTAMP)`,
-      [businessId, name, email, phone, businessType, schemaName, address, city, country]
+      [businessId, name, email, phone, businessType, address, city, country, subscriptionPlan]
     );
-
-    // Create the business schema
-    const quotedSchema = `"${schemaName.replace(/"/g, '""')}"`;
-    await client.query(`CREATE SCHEMA IF NOT EXISTS ${quotedSchema}`);
-
-    // Set search path to new schema
-    await client.query(`SET search_path TO ${quotedSchema}, public`);
-
-    // Create tables based on business type
-    await createBusinessTables(client, businessType);
 
     // Create admin user for the business
     const adminId = uuidv4();
-    const adminUsername = adminEmail.split('@')[0];
+    const adminUsername = adminEmail.split('@')[0] + '_' + businessId.substring(0, 8);
     const hashedPassword = await bcrypt.hash(adminPassword, 12);
 
     await client.query(
       `INSERT INTO users (id, username, email, password, name, role, active, business_id, created_at)
        VALUES ($1, $2, $3, $4, $5, 'ADMIN', true, $6, CURRENT_TIMESTAMP)`,
-      [adminId, adminUsername, adminEmail, hashedPassword, adminName, businessId]
-    );
-
-    // Also insert admin user in main schema with business_id
-    await client.query(`SET search_path TO ${config.schema}, public`);
-    await client.query(
-      `INSERT INTO users (id, username, email, password, name, role, active, business_id, created_at)
-       VALUES ($1, $2, $3, $4, $5, 'ADMIN', true, $6, CURRENT_TIMESTAMP)
-       ON CONFLICT (email) DO NOTHING`,
       [adminId, adminUsername, adminEmail, hashedPassword, adminName, businessId]
     );
 
@@ -270,16 +223,18 @@ router.post('/', authenticate, isSuperAdmin, async (req, res, next) => {
         email,
         phone,
         businessType,
-        schemaName,
+        subscriptionPlan,
         status: 'active',
         createdAt: new Date().toISOString(),
         adminUser: {
           id: adminId,
+          username: adminUsername,
           email: adminEmail,
+          name: adminName,
           role: 'ADMIN'
         }
       },
-      message: `Business created successfully. Schema '${schemaName}' has been created.`
+      message: 'Business created successfully'
     });
   } catch (error) {
     await client.query('ROLLBACK');
@@ -310,9 +265,64 @@ router.get('/:id', authenticate, isSuperAdmin, async (req, res, next) => {
       });
     }
 
+    // Get admin users for this business
+    const [admins] = await query(
+      `SELECT id, username, email, name, role, active, last_login, created_at 
+       FROM users WHERE business_id = $1 AND role = 'ADMIN'`,
+      [id]
+    );
+
     res.json({
       success: true,
-      data: businesses[0]
+      data: {
+        ...businesses[0],
+        admins
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/businesses/:id/users - Get all users for a business (Super Admin only)
+router.get('/:id/users', authenticate, isSuperAdmin, async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, limit = 20, role } = req.query;
+    const offset = (parseInt(page) - 1) * parseInt(limit);
+
+    let whereClause = 'WHERE business_id = $1';
+    const params = [id];
+    let paramIndex = 2;
+
+    if (role) {
+      whereClause += ` AND role = $${paramIndex++}`;
+      params.push(role);
+    }
+
+    const [countResult] = await query(
+      `SELECT COUNT(*) as total FROM users ${whereClause}`,
+      params
+    );
+    const total = parseInt(countResult[0]?.total || 0);
+
+    params.push(parseInt(limit), offset);
+    const [users] = await query(
+      `SELECT id, username, email, name, phone, role, active, last_login, created_at 
+       FROM users ${whereClause}
+       ORDER BY created_at DESC 
+       LIMIT $${paramIndex++} OFFSET $${paramIndex}`,
+      params
+    );
+
+    res.json({
+      success: true,
+      data: {
+        users,
+        total,
+        page: parseInt(page),
+        pages: Math.ceil(total / parseInt(limit))
+      }
     });
   } catch (error) {
     next(error);
@@ -380,6 +390,12 @@ router.delete('/:id', authenticate, isSuperAdmin, async (req, res, next) => {
       [id]
     );
 
+    // Deactivate all users of this business
+    await query(
+      `UPDATE users SET active = false WHERE business_id = $1`,
+      [id]
+    );
+
     res.json({
       success: true,
       message: 'Business deactivated successfully'
@@ -404,7 +420,13 @@ router.post('/:id/activate', authenticate, isSuperAdmin, async (req, res, next) 
     }
 
     await query(
-      `UPDATE businesses SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      `UPDATE businesses SET status = 'active', suspension_reason = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = $1`,
+      [id]
+    );
+
+    // Reactivate admin users
+    await query(
+      `UPDATE users SET active = true WHERE business_id = $1 AND role = 'ADMIN'`,
       [id]
     );
 
@@ -446,246 +468,92 @@ router.post('/:id/suspend', authenticate, isSuperAdmin, async (req, res, next) =
   }
 });
 
-// Helper function to create business-specific tables
-async function createBusinessTables(client, businessType) {
-  // Common tables for all business types
-  
-  // Users table (business-specific)
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS users (
-      id VARCHAR(36) PRIMARY KEY,
-      username VARCHAR(50) NOT NULL,
-      email VARCHAR(255) UNIQUE NOT NULL,
-      password VARCHAR(255) NOT NULL,
-      name VARCHAR(100) NOT NULL,
-      phone VARCHAR(50),
-      role VARCHAR(20) DEFAULT 'CASHIER' CHECK (role IN ('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER')),
-      active BOOLEAN DEFAULT TRUE,
-      business_id VARCHAR(36),
-      avatar VARCHAR(500),
-      last_login TIMESTAMP,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+// POST /api/businesses/:id/users - Create user for a business (Business Admin or Super Admin)
+router.post('/:id/users', authenticate, async (req, res, next) => {
+  try {
+    const { id: businessId } = req.params;
+    const { username, email, password, name, phone, role = 'CASHIER' } = req.body;
 
-  // Categories table
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS categories (
-      id VARCHAR(36) PRIMARY KEY,
-      name VARCHAR(255) NOT NULL,
-      description TEXT,
-      is_active BOOLEAN DEFAULT TRUE,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    // Check authorization: Super Admin can create for any business, Business Admin for their own
+    const isSuperAdminUser = req.user.role === 'SUPER_ADMIN';
+    const isBusinessAdmin = req.user.role === 'ADMIN' && req.user.business_id === businessId;
 
-  // Suppliers table
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS suppliers (
-      id VARCHAR(36) PRIMARY KEY,
-      name VARCHAR(255) NOT NULL,
-      contact_person VARCHAR(255),
-      email VARCHAR(255),
-      phone VARCHAR(50),
-      address TEXT,
-      city VARCHAR(100),
-      is_active BOOLEAN DEFAULT TRUE,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    if (!isSuperAdminUser && !isBusinessAdmin) {
+      return res.status(403).json({
+        success: false,
+        error: 'Access denied. You can only create users for your own business.'
+      });
+    }
 
-  // Sales table
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS sales (
-      id VARCHAR(36) PRIMARY KEY,
-      subtotal DECIMAL(12,2) NOT NULL,
-      discount DECIMAL(12,2) DEFAULT 0,
-      tax DECIMAL(12,2) DEFAULT 0,
-      total DECIMAL(12,2) NOT NULL,
-      payment_method VARCHAR(50) NOT NULL,
-      cashier_id VARCHAR(36),
-      cashier_name VARCHAR(100),
-      customer_name VARCHAR(255),
-      customer_phone VARCHAR(50),
-      notes TEXT,
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    // Validate required fields
+    if (!email || !password || !name) {
+      return res.status(400).json({
+        success: false,
+        error: 'Missing required fields: email, password, name'
+      });
+    }
 
-  // Sale items table
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS sale_items (
-      id VARCHAR(36) PRIMARY KEY,
-      sale_id VARCHAR(36) REFERENCES sales(id) ON DELETE CASCADE,
-      product_id VARCHAR(36) NOT NULL,
-      product_name VARCHAR(255) NOT NULL,
-      unit_type VARCHAR(50),
-      quantity INTEGER NOT NULL,
-      unit_price DECIMAL(12,2) NOT NULL,
-      total_price DECIMAL(12,2) NOT NULL,
-      cost_price DECIMAL(12,2)
-    )
-  `);
+    // Validate role
+    const validRoles = ['ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'];
+    if (!validRoles.includes(role)) {
+      return res.status(400).json({
+        success: false,
+        error: `Invalid role. Must be one of: ${validRoles.join(', ')}`
+      });
+    }
 
-  // Expenses table
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS expenses (
-      id VARCHAR(36) PRIMARY KEY,
-      category VARCHAR(100) NOT NULL,
-      description TEXT,
-      amount DECIMAL(12,2) NOT NULL,
-      expense_date DATE NOT NULL,
-      created_by VARCHAR(36),
-      created_by_name VARCHAR(100),
-      status VARCHAR(20) DEFAULT 'PENDING',
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    // Check if business exists
+    const [business] = await query('SELECT id, status FROM businesses WHERE id = $1', [businessId]);
+    if (business.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Business not found'
+      });
+    }
 
-  // Purchase orders table
-  await client.query(`
-    CREATE TABLE IF NOT EXISTS purchase_orders (
-      id VARCHAR(36) PRIMARY KEY,
-      order_number VARCHAR(50) UNIQUE,
-      supplier_id VARCHAR(36) REFERENCES suppliers(id),
-      status VARCHAR(50) DEFAULT 'DRAFT',
-      total_amount DECIMAL(12,2),
-      expected_date DATE,
-      notes TEXT,
-      created_by VARCHAR(36),
-      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    )
-  `);
+    if (business[0].status !== 'active') {
+      return res.status(400).json({
+        success: false,
+        error: 'Cannot add users to inactive or suspended business'
+      });
+    }
 
-  // Business type specific tables
-  if (businessType === 'pharmacy') {
-    // Medicines table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS medicines (
-        id VARCHAR(36) PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        generic_name VARCHAR(255),
-        category_id VARCHAR(36) REFERENCES categories(id),
-        manufacturer VARCHAR(255),
-        batch_number VARCHAR(100),
-        expiry_date DATE NOT NULL,
-        stock_quantity INTEGER DEFAULT 0,
-        reorder_level INTEGER DEFAULT 10,
-        cost_price DECIMAL(12,2) NOT NULL,
-        product_type VARCHAR(50) DEFAULT 'tablets',
-        description TEXT,
-        image_url VARCHAR(500),
-        is_active BOOLEAN DEFAULT TRUE,
-        supplier_id VARCHAR(36) REFERENCES suppliers(id),
-        requires_prescription BOOLEAN DEFAULT FALSE,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    // Check if email already exists
+    const [existingUser] = await query('SELECT id FROM users WHERE email = $1', [email]);
+    if (existingUser.length > 0) {
+      return res.status(409).json({
+        success: false,
+        error: 'A user with this email already exists'
+      });
+    }
 
-    // Medicine units table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS medicine_units (
-        id VARCHAR(36) PRIMARY KEY,
-        medicine_id VARCHAR(36) REFERENCES medicines(id) ON DELETE CASCADE,
-        type VARCHAR(50) NOT NULL,
-        quantity INTEGER NOT NULL,
-        price DECIMAL(12,2) NOT NULL,
-        label VARCHAR(100)
-      )
-    `);
+    const userId = uuidv4();
+    const finalUsername = username || email.split('@')[0] + '_' + businessId.substring(0, 8);
+    const hashedPassword = await bcrypt.hash(password, 12);
 
-    // Prescriptions table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS prescriptions (
-        id VARCHAR(36) PRIMARY KEY,
-        patient_name VARCHAR(255) NOT NULL,
-        patient_phone VARCHAR(50),
-        doctor_name VARCHAR(255),
-        notes TEXT,
-        status VARCHAR(50) DEFAULT 'pending',
-        created_by VARCHAR(36),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    await query(
+      `INSERT INTO users (id, username, email, password, name, phone, role, active, business_id, created_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, CURRENT_TIMESTAMP)`,
+      [userId, finalUsername, email, hashedPassword, name, phone, role, businessId]
+    );
 
-    // Prescription items table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS prescription_items (
-        id VARCHAR(36) PRIMARY KEY,
-        prescription_id VARCHAR(36) REFERENCES prescriptions(id) ON DELETE CASCADE,
-        medicine_id VARCHAR(36) REFERENCES medicines(id),
-        medicine_name VARCHAR(255),
-        dosage VARCHAR(100),
-        quantity INTEGER,
-        instructions TEXT
-      )
-    `);
-
-    // Stock movements table
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS stock_movements (
-        id VARCHAR(36) PRIMARY KEY,
-        medicine_id VARCHAR(36) REFERENCES medicines(id),
-        type VARCHAR(20) NOT NULL,
-        quantity INTEGER NOT NULL,
-        batch_number VARCHAR(100),
-        reference_id VARCHAR(36),
-        notes TEXT,
-        created_by VARCHAR(36),
-        previous_stock INTEGER DEFAULT 0,
-        new_stock INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-  } else {
-    // Products table (for general, supermarket, retail)
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS products (
-        id VARCHAR(36) PRIMARY KEY,
-        name VARCHAR(255) NOT NULL,
-        sku VARCHAR(100),
-        barcode VARCHAR(100),
-        category_id VARCHAR(36) REFERENCES categories(id),
-        brand VARCHAR(255),
-        stock_quantity INTEGER DEFAULT 0,
-        reorder_level INTEGER DEFAULT 10,
-        cost_price DECIMAL(12,2) NOT NULL,
-        selling_price DECIMAL(12,2) NOT NULL,
-        description TEXT,
-        image_url VARCHAR(500),
-        is_active BOOLEAN DEFAULT TRUE,
-        supplier_id VARCHAR(36) REFERENCES suppliers(id),
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Stock movements table for products
-    await client.query(`
-      CREATE TABLE IF NOT EXISTS stock_movements (
-        id VARCHAR(36) PRIMARY KEY,
-        product_id VARCHAR(36) REFERENCES products(id),
-        type VARCHAR(20) NOT NULL,
-        quantity INTEGER NOT NULL,
-        reference_id VARCHAR(36),
-        notes TEXT,
-        created_by VARCHAR(36),
-        previous_stock INTEGER DEFAULT 0,
-        new_stock INTEGER DEFAULT 0,
-        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
+    res.status(201).json({
+      success: true,
+      data: {
+        id: userId,
+        username: finalUsername,
+        email,
+        name,
+        phone,
+        role,
+        businessId,
+        active: true
+      },
+      message: 'User created successfully'
+    });
+  } catch (error) {
+    next(error);
   }
-
-  console.log(`   ✅ Created tables for ${businessType} business`);
-}
+});
 
 module.exports = router;

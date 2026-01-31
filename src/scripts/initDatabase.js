@@ -50,11 +50,11 @@ const createSchema = async (client) => {
   console.log(`✅ Schema '${config.schema}' ready`);
 };
 
-// V1: Initial tables
+// V1: Initial tables - All tables in single schema with business_id for multi-tenancy
 const createV1Tables = async (client) => {
   console.log('📋 Creating v1 tables (initial schema)...');
 
-  // Businesses table (master list in public schema)
+  // Businesses table (master list)
   await client.query(`
     CREATE TABLE IF NOT EXISTS businesses (
       id VARCHAR(36) PRIMARY KEY,
@@ -62,7 +62,6 @@ const createV1Tables = async (client) => {
       email VARCHAR(255) UNIQUE NOT NULL,
       phone VARCHAR(50),
       business_type VARCHAR(20) NOT NULL CHECK (business_type IN ('pharmacy', 'general', 'supermarket', 'retail')),
-      schema_name VARCHAR(63) UNIQUE NOT NULL,
       address TEXT,
       city VARCHAR(100),
       country VARCHAR(100),
@@ -76,39 +75,43 @@ const createV1Tables = async (client) => {
     )
   `);
 
-  // Users table
+  // Users table - All users in single table with business_id for isolation
   await client.query(`
     CREATE TABLE IF NOT EXISTS users (
       id VARCHAR(36) PRIMARY KEY,
-      username VARCHAR(50) UNIQUE NOT NULL,
+      username VARCHAR(50) NOT NULL,
       email VARCHAR(255) UNIQUE NOT NULL,
       password VARCHAR(255) NOT NULL,
       name VARCHAR(100) NOT NULL,
       phone VARCHAR(50),
       role VARCHAR(20) DEFAULT 'CASHIER' CHECK (role IN ('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER', 'SUPER_ADMIN')),
       active BOOLEAN DEFAULT TRUE,
-      business_id VARCHAR(36) REFERENCES businesses(id),
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE SET NULL,
+      avatar VARCHAR(500),
       last_login TIMESTAMP,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
       updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
   `);
 
-  // Categories table
+  // Categories table - with business_id for multi-tenancy
   await client.query(`
     CREATE TABLE IF NOT EXISTS categories (
       id VARCHAR(36) PRIMARY KEY,
-      name VARCHAR(100) UNIQUE NOT NULL,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
+      name VARCHAR(100) NOT NULL,
       description TEXT,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(business_id, name)
     )
   `);
 
-  // Medicines table
+  // Medicines table - with business_id
   await client.query(`
     CREATE TABLE IF NOT EXISTS medicines (
       id VARCHAR(36) PRIMARY KEY,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
       name VARCHAR(255) NOT NULL,
       generic_name VARCHAR(255),
       category VARCHAR(100),
@@ -130,10 +133,11 @@ const createV1Tables = async (client) => {
     )
   `);
 
-  // Suppliers table
+  // Suppliers table - with business_id
   await client.query(`
     CREATE TABLE IF NOT EXISTS suppliers (
       id VARCHAR(36) PRIMARY KEY,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
       name VARCHAR(255) NOT NULL,
       contact_person VARCHAR(100),
       email VARCHAR(255),
@@ -148,10 +152,11 @@ const createV1Tables = async (client) => {
     )
   `);
 
-  // Stock movements table
+  // Stock movements table - with business_id
   await client.query(`
     CREATE TABLE IF NOT EXISTS stock_movements (
       id VARCHAR(36) PRIMARY KEY,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
       medicine_id VARCHAR(36) NOT NULL,
       medicine_name VARCHAR(255),
       type VARCHAR(20) NOT NULL CHECK (type IN ('ADDITION', 'SALE', 'LOSS', 'ADJUSTMENT', 'PURCHASE')),
@@ -169,10 +174,11 @@ const createV1Tables = async (client) => {
     )
   `);
 
-  // Sales table
+  // Sales table - with business_id
   await client.query(`
     CREATE TABLE IF NOT EXISTS sales (
       id VARCHAR(36) PRIMARY KEY,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
       cashier_id VARCHAR(36) NOT NULL,
       cashier_name VARCHAR(100),
       total_amount DECIMAL(10, 2) DEFAULT 0,
@@ -204,17 +210,18 @@ const createV1Tables = async (client) => {
     )
   `);
 
-  await recordMigration(client, 1, 'Initial schema with users, categories, medicines, suppliers, stock movements, sales');
+  await recordMigration(client, 1, 'Initial schema with businesses, users, categories, medicines, suppliers, stock movements, sales');
 };
 
 // V2: Additional tables
 const createV2Tables = async (client) => {
   console.log('📋 Creating v2 tables (expenses, prescriptions)...');
 
-  // Expenses table
+  // Expenses table - with business_id
   await client.query(`
     CREATE TABLE IF NOT EXISTS expenses (
       id VARCHAR(36) PRIMARY KEY,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
       category VARCHAR(100) NOT NULL,
       description TEXT,
       amount DECIMAL(10, 2) NOT NULL,
@@ -234,10 +241,11 @@ const createV2Tables = async (client) => {
     )
   `);
 
-  // Prescriptions table
+  // Prescriptions table - with business_id
   await client.query(`
     CREATE TABLE IF NOT EXISTS prescriptions (
       id VARCHAR(36) PRIMARY KEY,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
       patient_name VARCHAR(100) NOT NULL,
       patient_phone VARCHAR(50),
       doctor_name VARCHAR(100),
@@ -276,11 +284,12 @@ const createV2Tables = async (client) => {
 const createV3Tables = async (client) => {
   console.log('📋 Creating v3 tables (purchase orders, employees, payroll)...');
 
-  // Purchase orders table
+  // Purchase orders table - with business_id
   await client.query(`
     CREATE TABLE IF NOT EXISTS purchase_orders (
       id VARCHAR(36) PRIMARY KEY,
-      order_number VARCHAR(50) UNIQUE NOT NULL,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
+      order_number VARCHAR(50) NOT NULL,
       supplier_id VARCHAR(36) NOT NULL,
       supplier_name VARCHAR(255),
       subtotal DECIMAL(10, 2) DEFAULT 0,
@@ -301,7 +310,8 @@ const createV3Tables = async (client) => {
       received_at TIMESTAMP,
       submitted_at TIMESTAMP,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(business_id, order_number)
     )
   `);
 
@@ -320,11 +330,12 @@ const createV3Tables = async (client) => {
     )
   `);
 
-  // Employees table
+  // Employees table - with business_id
   await client.query(`
     CREATE TABLE IF NOT EXISTS employees (
       id VARCHAR(36) PRIMARY KEY,
-      employee_id VARCHAR(50) UNIQUE NOT NULL,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
+      employee_id VARCHAR(50) NOT NULL,
       user_id VARCHAR(36),
       name VARCHAR(100) NOT NULL,
       email VARCHAR(255),
@@ -339,14 +350,16 @@ const createV3Tables = async (client) => {
       address TEXT,
       active BOOLEAN DEFAULT TRUE,
       created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      UNIQUE(business_id, employee_id)
     )
   `);
 
-  // Payroll table
+  // Payroll table - with business_id
   await client.query(`
     CREATE TABLE IF NOT EXISTS payroll (
       id VARCHAR(36) PRIMARY KEY,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
       employee_id VARCHAR(36) NOT NULL,
       employee_name VARCHAR(100),
       pay_period VARCHAR(7) NOT NULL,
@@ -371,37 +384,30 @@ const createV3Tables = async (client) => {
 const createV4Indexes = async (client) => {
   console.log('🔍 Creating indexes and constraints...');
   
-  // Add foreign key constraints
-  const constraints = [
-    { table: 'medicines', column: 'category_id', ref: 'categories(id)', constraint: 'fk_medicines_category' },
-    { table: 'stock_movements', column: 'medicine_id', ref: 'medicines(id)', constraint: 'fk_stock_movements_medicine' },
-    { table: 'sale_items', column: 'sale_id', ref: 'sales(id)', constraint: 'fk_sale_items_sale' },
-    { table: 'sale_items', column: 'medicine_id', ref: 'medicines(id)', constraint: 'fk_sale_items_medicine' },
-    { table: 'prescription_items', column: 'prescription_id', ref: 'prescriptions(id)', constraint: 'fk_prescription_items_prescription' },
-    { table: 'prescription_items', column: 'medicine_id', ref: 'medicines(id)', constraint: 'fk_prescription_items_medicine' },
-    { table: 'purchase_orders', column: 'supplier_id', ref: 'suppliers(id)', constraint: 'fk_purchase_orders_supplier' },
-    { table: 'purchase_order_items', column: 'purchase_order_id', ref: 'purchase_orders(id)', constraint: 'fk_purchase_order_items_order' },
-    { table: 'purchase_order_items', column: 'medicine_id', ref: 'medicines(id)', constraint: 'fk_purchase_order_items_medicine' },
-    { table: 'payroll', column: 'employee_id', ref: 'employees(id)', constraint: 'fk_payroll_employee' },
+  // Create indexes for business_id on all tables (critical for multi-tenancy performance)
+  const businessIdIndexes = [
+    { name: 'idx_users_business', table: 'users', column: 'business_id' },
+    { name: 'idx_categories_business', table: 'categories', column: 'business_id' },
+    { name: 'idx_medicines_business', table: 'medicines', column: 'business_id' },
+    { name: 'idx_suppliers_business', table: 'suppliers', column: 'business_id' },
+    { name: 'idx_stock_movements_business', table: 'stock_movements', column: 'business_id' },
+    { name: 'idx_sales_business', table: 'sales', column: 'business_id' },
+    { name: 'idx_expenses_business', table: 'expenses', column: 'business_id' },
+    { name: 'idx_prescriptions_business', table: 'prescriptions', column: 'business_id' },
+    { name: 'idx_purchase_orders_business', table: 'purchase_orders', column: 'business_id' },
+    { name: 'idx_employees_business', table: 'employees', column: 'business_id' },
+    { name: 'idx_payroll_business', table: 'payroll', column: 'business_id' },
   ];
 
-  for (const constraint of constraints) {
+  for (const idx of businessIdIndexes) {
     try {
-      await client.query(`
-        ALTER TABLE ${constraint.table}
-        ADD CONSTRAINT ${constraint.constraint}
-        FOREIGN KEY (${constraint.column}) REFERENCES ${constraint.ref}
-        ON DELETE RESTRICT
-      `);
+      await client.query(`CREATE INDEX IF NOT EXISTS ${idx.name} ON ${idx.table}(${idx.column})`);
     } catch (error) {
-      // Constraint might already exist
-      if (!error.message.includes('already exists')) {
-        console.warn(`   ⚠️ Could not add constraint ${constraint.constraint}:`, error.message);
-      }
+      console.warn(`   ⚠️ Could not create index ${idx.name}:`, error.message);
     }
   }
 
-  // Create indexes
+  // Other useful indexes
   const indexes = [
     { name: 'idx_medicines_category', table: 'medicines', column: 'category' },
     { name: 'idx_medicines_expiry', table: 'medicines', column: 'expiry_date' },
@@ -418,6 +424,8 @@ const createV4Indexes = async (client) => {
     { name: 'idx_purchase_orders_supplier', table: 'purchase_orders', column: 'supplier_id' },
     { name: 'idx_payroll_period', table: 'payroll', column: 'pay_period' },
     { name: 'idx_payroll_employee', table: 'payroll', column: 'employee_id' },
+    { name: 'idx_users_role', table: 'users', column: 'role' },
+    { name: 'idx_businesses_status', table: 'businesses', column: 'status' },
   ];
 
   for (const idx of indexes) {
@@ -428,7 +436,7 @@ const createV4Indexes = async (client) => {
     }
   }
 
-  await recordMigration(client, 4, 'Added foreign key constraints and indexes');
+  await recordMigration(client, 4, 'Added business_id indexes and other performance indexes');
 };
 
 // V5: Add audit triggers
@@ -449,11 +457,12 @@ const createV5Triggers = async (client) => {
   // Apply trigger to tables with updated_at column
   const tablesWithUpdatedAt = [
     'users', 'categories', 'medicines', 'suppliers', 'expenses', 
-    'prescriptions', 'purchase_orders', 'employees', 'payroll'
+    'prescriptions', 'purchase_orders', 'employees', 'payroll', 'businesses'
   ];
 
   for (const table of tablesWithUpdatedAt) {
     try {
+      await client.query(`DROP TRIGGER IF EXISTS update_${table}_updated_at ON ${table}`);
       await client.query(`
         CREATE TRIGGER update_${table}_updated_at
         BEFORE UPDATE ON ${table}
@@ -468,6 +477,7 @@ const createV5Triggers = async (client) => {
   await recordMigration(client, 5, 'Added audit triggers for updated_at columns');
 };
 
+// Create super admin and default data
 const createDefaultData = async (client) => {
   console.log('📥 Creating default data...');
 
@@ -490,76 +500,50 @@ const createDefaultData = async (client) => {
       const hashedPassword = await bcrypt.hash(superAdminPassword, 12);
 
       await client.query(`
-        INSERT INTO users (id, username, email, password, name, role, active)
-        VALUES ($1, $2, $3, $4, $5, 'SUPER_ADMIN', true)
+        INSERT INTO users (id, username, email, password, name, role, active, business_id)
+        VALUES ($1, $2, $3, $4, $5, 'SUPER_ADMIN', true, NULL)
       `, [id, username, superAdminEmail, hashedPassword, superAdminName]);
 
       console.log('✅ Super admin user created');
+      console.log(`   Email: ${superAdminEmail}`);
     } else {
-      console.log('✅ Super admin user already exists');
+      // Update super admin password if it changed
+      const hashedPassword = await bcrypt.hash(superAdminPassword, 12);
+      await client.query(`
+        UPDATE users SET 
+          password = $1, 
+          name = $2, 
+          role = 'SUPER_ADMIN',
+          active = true,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE email = $3
+      `, [hashedPassword, superAdminName, superAdminEmail]);
+      console.log('✅ Super admin user updated');
     }
+  } else {
+    console.log('⚠️ Super admin not configured. Set SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD in environment.');
   }
 
-  // Create admin user if enabled (for backward compatibility)
-  if (process.env.ADMIN_ENABLED === 'true') {
-    console.log('👤 Checking admin user...');
-    
-    const adminEmail = process.env.ADMIN_EMAIL;
-    const adminPassword = process.env.ADMIN_PASSWORD;
-    const adminName = process.env.ADMIN_NAME || 'System Administrator';
-    const adminPhone = process.env.ADMIN_PHONE || '';
+  // Create default categories if none exist
+  const categoryCount = await client.query('SELECT COUNT(*) as count FROM categories WHERE business_id IS NULL');
+  if (parseInt(categoryCount.rows[0].count) === 0) {
+    const defaultCategories = [
+      { name: 'Antibiotics', description: 'Medications that fight bacterial infections' },
+      { name: 'Pain Relief', description: 'Medications for pain management' },
+      { name: 'Vitamins & Supplements', description: 'Nutritional supplements and vitamins' },
+      { name: 'First Aid', description: 'Basic first aid supplies' },
+      { name: 'Skin Care', description: 'Skin care products and medications' }
+    ];
 
-    if (adminEmail && adminPassword) {
-      const existingAdmin = await client.query(
-        "SELECT id FROM users WHERE email = $1 OR role = 'ADMIN'",
-        [adminEmail]
-      );
-
-      if (existingAdmin.rows.length === 0) {
-        const id = uuidv4();
-        const username = adminEmail.split('@')[0];
-        const hashedPassword = await bcrypt.hash(adminPassword, 10);
-
-        await client.query(`
-          INSERT INTO users (id, username, email, password, name, phone, role, active)
-          VALUES ($1, $2, $3, $4, $5, $6, 'ADMIN', true)
-        `, [id, username, adminEmail, hashedPassword, adminName, adminPhone]);
-
-        console.log('✅ Admin user created');
-      } else {
-        console.log('✅ Admin user already exists');
-      }
-    }
-  }
-
-  // Create default categories
-  console.log('📂 Checking default categories...');
-  const categories = [
-    { name: 'Tablets', description: 'Oral solid dosage forms' },
-    { name: 'Capsules', description: 'Oral capsule medications' },
-    { name: 'Syrups', description: 'Liquid oral medications' },
-    { name: 'Injections', description: 'Injectable medications' },
-    { name: 'Topicals', description: 'Creams, ointments, and lotions' },
-    { name: 'Drops', description: 'Eye, ear, and nasal drops' },
-    { name: 'Supplies', description: 'Medical supplies and consumables' },
-    { name: 'Equipment', description: 'Medical equipment and devices' },
-  ];
-
-  for (const cat of categories) {
-    const existing = await client.query(
-      'SELECT id FROM categories WHERE name = $1',
-      [cat.name]
-    );
-
-    if (existing.rows.length === 0) {
+    for (const cat of defaultCategories) {
+      const catId = uuidv4();
       await client.query(
-        'INSERT INTO categories (id, name, description) VALUES ($1, $2, $3)',
-        [uuidv4(), cat.name, cat.description]
+        'INSERT INTO categories (id, business_id, name, description) VALUES ($1, NULL, $2, $3) ON CONFLICT DO NOTHING',
+        [catId, cat.name, cat.description]
       );
     }
+    console.log('✅ Default categories created');
   }
-
-  console.log('✅ Default data ready');
 };
 
 // Migration definitions
@@ -571,7 +555,6 @@ const migrations = [
   { version: 5, description: 'Audit triggers', migrate: createV5Triggers },
 ];
 
-// Main initialization function
 const initializeDatabase = async () => {
   console.log('');
   console.log('🚀 PharmaCare Database Initialization');
@@ -585,8 +568,8 @@ const initializeDatabase = async () => {
   const client = await pool.connect();
   
   try {
-    // Set search path
-    await client.query(`SET search_path TO ${config.schema}, public`);
+    // Create and set schema
+    await createSchema(client);
     
     // Create version table
     await createVersionTable(client);
@@ -636,12 +619,4 @@ const initializeDatabase = async () => {
   }
 };
 
-// Auto-run if called directly
-if (require.main === module) {
-  initializeDatabase().catch(console.error);
-}
-
-module.exports = { 
-  initializeDatabase,
-  getCurrentVersion 
-};
+module.exports = { initializeDatabase };
