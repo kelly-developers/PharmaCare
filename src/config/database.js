@@ -28,7 +28,7 @@ const getConnectionConfig = () => {
       database: jdbcConfig.database,
       user: process.env.DATASOURCE_USER || process.env.DB_USER,
       password: process.env.DATASOURCE_PASSWORD || process.env.DB_PASSWORD,
-      schema: process.env.DB_SCHEMA || jdbcConfig.schema || 'spotmedpharmacare',
+      schema: process.env.DB_SCHEMA || jdbcConfig.schema || 'sme_platform',
       ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
     };
   }
@@ -40,7 +40,7 @@ const getConnectionConfig = () => {
     database: process.env.DB_NAME || 'pharmacare',
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || '',
-    schema: process.env.DB_SCHEMA || 'spotmedpharmacare',
+    schema: process.env.DB_SCHEMA || 'sme_platform',
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
   };
 };

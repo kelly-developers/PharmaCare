@@ -2,8 +2,8 @@
 -- This file is for reference only - tables are auto-created by initDatabase.js
 
 -- Schema
-CREATE SCHEMA IF NOT EXISTS spotmedpharmacare;
-SET search_path TO spotmedpharmacare, public;
+CREATE SCHEMA IF NOT EXISTS sme_platform;
+SET search_path TO sme_platform, public;
 
 -- Users table
 CREATE TABLE IF NOT EXISTS users (

@@ -42,7 +42,7 @@ const recordMigration = async (client, version, description) => {
 const createSchema = async (client) => {
   console.log('📦 Creating schema if not exists...');
 
-  const schema = String(config.schema || 'spotmedpharmacare').replace(/"/g, '""');
+  const schema = String(config.schema || 'sme_platform').replace(/"/g, '""');
   const quotedSchema = `"${schema}"`;
 
   await client.query(`CREATE SCHEMA IF NOT EXISTS ${quotedSchema}`);

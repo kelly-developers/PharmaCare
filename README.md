@@ -54,7 +54,7 @@ Set these in your Render dashboard:
 | `DATASOURCE_URL` | `jdbc:postgresql://host:5432/db?currentSchema=myschema` | PostgreSQL connection URL |
 | `DATASOURCE_USER` | `your_db_user` | Database user |
 | `DATASOURCE_PASSWORD` | `your_db_password` | Database password |
-| `DB_SCHEMA` | `spotmedpharmacare` | Main schema name |
+| `DB_SCHEMA` | `sme_platform` | Main schema name |
 | `JWT_SECRET` | `your-secure-jwt-secret-key` | JWT signing secret |
 | `ALLOWED_ORIGINS` | `https://your-frontend.netlify.app` | Allowed CORS origins |
 | **Super Admin (Required)** | | |
