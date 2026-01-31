@@ -28,7 +28,7 @@ const getConnectionConfig = () => {
       database: jdbcConfig.database,
       user: process.env.DATASOURCE_USER || process.env.DB_USER,
       password: process.env.DATASOURCE_PASSWORD || process.env.DB_PASSWORD,
-      schema: process.env.DB_SCHEMA || jdbcConfig.schema || 'public',
+      schema: process.env.DB_SCHEMA || jdbcConfig.schema || 'spotmedpharmacare',
       ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
     };
   }
@@ -40,12 +40,19 @@ const getConnectionConfig = () => {
     database: process.env.DB_NAME || 'pharmacare',
     user: process.env.DB_USER || 'postgres',
     password: process.env.DB_PASSWORD || '',
-    schema: process.env.DB_SCHEMA || 'public',
+    schema: process.env.DB_SCHEMA || 'spotmedpharmacare',
     ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
   };
 };
 
 const config = getConnectionConfig();
+
+console.log('📊 Database Configuration:', {
+  host: config.host,
+  database: config.database,
+  schema: config.schema,
+  user: config.user
+});
 
 const pool = new Pool({
   host: config.host,
@@ -62,46 +69,50 @@ const pool = new Pool({
 // Set schema on each connection
 pool.on('connect', async (client) => {
   try {
-    await client.query(`SET search_path TO ${config.schema}, public`);
-    console.log(`✅ Database connected to schema: ${config.schema}`);
+    const schema = config.schema;
+    await client.query(`CREATE SCHEMA IF NOT EXISTS "${schema}"`);
+    await client.query(`SET search_path TO "${schema}", public`);
+    console.log(`✅ Database connected to schema: ${schema}`);
   } catch (error) {
-    console.error('Failed to set schema:', error);
+    console.error('Failed to set schema:', error.message);
   }
 });
 
-// Query wrapper with better error handling
+// Enhanced query wrapper with schema handling
 const query = async (text, params = []) => {
   let client;
   try {
     client = await pool.connect();
     
-    // Convert MySQL placeholders (?) to PostgreSQL ($1, $2, etc.)
-    let paramIndex = 0;
-    const pgText = text.replace(/\?/g, () => `$${++paramIndex}`);
+    // Always set schema first
+    await client.query(`SET search_path TO "${config.schema}", public`);
+    
+    // Convert MySQL placeholders if present
+    let pgText = text;
+    if (text.includes('?')) {
+      let paramIndex = 0;
+      pgText = text.replace(/\?/g, () => `$${++paramIndex}`);
+    }
     
     // Convert MySQL functions to PostgreSQL
-    const convertedText = pgText
+    pgText = pgText
       .replace(/NOW\(\)/gi, 'CURRENT_TIMESTAMP')
       .replace(/CURDATE\(\)/gi, 'CURRENT_DATE')
-      .replace(/DATE_ADD\(([^,]+),\s*INTERVAL\s+(\?|\$\d+)\s+DAY\)/gi, '($1 + INTERVAL \'1 day\' * $2)')
-      .replace(/DATE\(([^)]+)\)/gi, 'DATE($1)')
       .replace(/IFNULL/gi, 'COALESCE')
-      .replace(/LIMIT\s+(\?|\$\d+)\s+OFFSET\s+(\?|\$\d+)/gi, 'LIMIT $1 OFFSET $2');
+      .replace(/LIMIT\s+(\?|\$\d+),\s*(\?|\$\d+)/gi, 'LIMIT $2 OFFSET $1');
     
-    console.log('📝 Executing query:', convertedText.substring(0, 200) + '...');
-    console.log('📝 With params:', params);
+    // Log in development
+    if (process.env.NODE_ENV !== 'production') {
+      console.log(`📝 Query: ${pgText.substring(0, 150)}${pgText.length > 150 ? '...' : ''}`);
+    }
     
-    const result = await client.query(convertedText, params);
+    const result = await client.query(pgText, params);
     
-    // Return in mysql2 format: [[rows], [fields]]
-    return [result.rows, result.fields];
+    // Return in mysql2 format for compatibility
+    return [result.rows, result.fields || []];
   } catch (error) {
-    console.error('❌ Query Error:', {
-      originalText: text.substring(0, 200),
-      params: params,
-      error: error.message,
-      stack: error.stack
-    });
+    console.error('❌ Query Error:', error.message);
+    console.error('Query:', text.substring(0, 200));
     throw error;
   } finally {
     if (client) {
@@ -119,6 +130,5 @@ module.exports = {
   query, 
   queryDirect,
   pool, 
-  config,
-  getConnectionConfig 
+  config
 };
