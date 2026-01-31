@@ -42,12 +42,12 @@ const recordMigration = async (client, version, description) => {
 const createSchema = async (client) => {
   console.log('📦 Creating schema if not exists...');
 
-  const schema = String(config.schema || 'public').replace(/"/g, '""');
+  const schema = String(config.schema || 'spotmedpharmacare').replace(/"/g, '""');
   const quotedSchema = `"${schema}"`;
 
   await client.query(`CREATE SCHEMA IF NOT EXISTS ${quotedSchema}`);
   await client.query(`SET search_path TO ${quotedSchema}, public`);
-  console.log(`✅ Schema '${config.schema}' ready`);
+  console.log(`✅ Schema '${schema}' ready`);
 };
 
 // V1: Initial tables - All tables in single schema with business_id for multi-tenancy
@@ -477,6 +477,41 @@ const createV5Triggers = async (client) => {
   await recordMigration(client, 5, 'Added audit triggers for updated_at columns');
 };
 
+// Helper function to check if column exists
+const columnExists = async (client, tableName, columnName) => {
+  try {
+    const result = await client.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.columns 
+        WHERE table_schema = $1 
+        AND table_name = $2 
+        AND column_name = $3
+      )
+    `, [config.schema, tableName, columnName]);
+    return result.rows[0]?.exists || false;
+  } catch (error) {
+    console.warn(`⚠️ Could not check if column ${columnName} exists in ${tableName}:`, error.message);
+    return false;
+  }
+};
+
+// Helper function to check if table exists
+const tableExists = async (client, tableName) => {
+  try {
+    const result = await client.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_schema = $1 
+        AND table_name = $2
+      )
+    `, [config.schema, tableName]);
+    return result.rows[0]?.exists || false;
+  } catch (error) {
+    console.warn(`⚠️ Could not check if table ${tableName} exists:`, error.message);
+    return false;
+  }
+};
+
 // Create super admin and default data - FIXED VERSION
 const createDefaultData = async (client) => {
   console.log('📥 Creating default data...');
@@ -489,69 +524,96 @@ const createDefaultData = async (client) => {
   if (superAdminEmail && superAdminPassword) {
     console.log('👑 Checking super admin user...');
     
-    const existingSuperAdmin = await client.query(
-      "SELECT id FROM users WHERE email = $1",
-      [superAdminEmail]
-    );
+    try {
+      // First check if users table exists
+      const usersTableExists = await tableExists(client, 'users');
+      if (!usersTableExists) {
+        console.log('⚠️ Users table does not exist, skipping super admin creation');
+        return;
+      }
+      
+      // Check if business_id column exists in users table
+      const hasBusinessId = await columnExists(client, 'users', 'business_id');
+      
+      // Check if user already exists
+      const existingSuperAdmin = await client.query(
+        "SELECT id FROM users WHERE email = $1",
+        [superAdminEmail]
+      );
 
-    if (existingSuperAdmin.rows.length === 0) {
-      const id = uuidv4();
-      const username = 'superadmin';
-      const hashedPassword = await bcrypt.hash(superAdminPassword, 12);
+      if (existingSuperAdmin.rows.length === 0) {
+        const id = uuidv4();
+        const username = 'superadmin';
+        const hashedPassword = await bcrypt.hash(superAdminPassword, 12);
 
-      await client.query(`
-        INSERT INTO users (id, username, email, password, name, role, active, business_id)
-        VALUES ($1, $2, $3, $4, $5, 'SUPER_ADMIN', true, NULL)
-      `, [id, username, superAdminEmail, hashedPassword, superAdminName]);
+        if (hasBusinessId) {
+          // Insert with business_id column
+          await client.query(`
+            INSERT INTO users (id, username, email, password, name, role, active, business_id)
+            VALUES ($1, $2, $3, $4, $5, 'SUPER_ADMIN', true, NULL)
+          `, [id, username, superAdminEmail, hashedPassword, superAdminName]);
+        } else {
+          // Insert without business_id column
+          await client.query(`
+            INSERT INTO users (id, username, email, password, name, role, active)
+            VALUES ($1, $2, $3, $4, $5, 'SUPER_ADMIN', true)
+          `, [id, username, superAdminEmail, hashedPassword, superAdminName]);
+        }
 
-      console.log('✅ Super admin user created');
-      console.log(`   Email: ${superAdminEmail}`);
-    } else {
-      // Update super admin password if it changed
-      const hashedPassword = await bcrypt.hash(superAdminPassword, 12);
-      await client.query(`
-        UPDATE users SET 
-          password = $1, 
-          name = $2, 
-          role = 'SUPER_ADMIN',
-          active = true,
-          updated_at = CURRENT_TIMESTAMP
-        WHERE email = $3
-      `, [hashedPassword, superAdminName, superAdminEmail]);
-      console.log('✅ Super admin user updated');
+        console.log('✅ Super admin user created');
+        console.log(`   Email: ${superAdminEmail}`);
+      } else {
+        // Update super admin password if it changed
+        const hashedPassword = await bcrypt.hash(superAdminPassword, 12);
+        
+        if (hasBusinessId) {
+          await client.query(`
+            UPDATE users SET 
+              password = $1, 
+              name = $2, 
+              role = 'SUPER_ADMIN',
+              active = true,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE email = $3
+          `, [hashedPassword, superAdminName, superAdminEmail]);
+        } else {
+          await client.query(`
+            UPDATE users SET 
+              password = $1, 
+              name = $2, 
+              role = 'SUPER_ADMIN',
+              active = true,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE email = $3
+          `, [hashedPassword, superAdminName, superAdminEmail]);
+        }
+        console.log('✅ Super admin user updated');
+      }
+    } catch (error) {
+      console.warn('⚠️ Could not create/update super admin:', error.message);
+      // Don't throw error, just log it
     }
   } else {
     console.log('⚠️ Super admin not configured. Set SUPER_ADMIN_EMAIL and SUPER_ADMIN_PASSWORD in environment.');
   }
 
-  // Create default categories - FIXED: Check table exists first, then insert
+  // Create default categories
   try {
     console.log('📁 Checking for categories table...');
     
-    // First check if categories table exists at all
-    const tableCheck = await client.query(`
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_schema = $1 
-        AND table_name = 'categories'
-      )
-    `, [config.schema]);
-
-    if (!tableCheck.rows[0]?.exists) {
-      console.log('⚠️ Categories table does not exist yet, skipping default categories');
+    // First check if categories table exists
+    const categoriesTableExists = await tableExists(client, 'categories');
+    if (!categoriesTableExists) {
+      console.log('⚠️ Categories table does not exist, skipping default categories');
       return;
     }
 
-    // Check if any categories exist (with or without business_id)
+    // Check if any categories exist
     let categoryCount;
     
-    // Try to query with business_id first
     try {
-      categoryCount = await client.query(`
-        SELECT COUNT(*) as count FROM categories
-      `);
+      categoryCount = await client.query(`SELECT COUNT(*) as count FROM categories`);
     } catch (queryError) {
-      // If that fails, table might not have business_id yet or might be empty
       console.log('⚠️ Could not query categories table, skipping default categories');
       return;
     }
@@ -568,34 +630,49 @@ const createDefaultData = async (client) => {
       ];
 
       // Check if business_id column exists
-      const columnCheck = await client.query(`
-        SELECT EXISTS (
-          SELECT FROM information_schema.columns 
-          WHERE table_schema = $1 
-          AND table_name = 'categories' 
-          AND column_name = 'business_id'
-        )
-      `, [config.schema]);
-
-      const hasBusinessIdColumn = columnCheck.rows[0]?.exists;
+      const hasBusinessIdColumn = await columnExists(client, 'categories', 'business_id');
 
       for (const cat of defaultCategories) {
         const catId = uuidv4();
         
         if (hasBusinessIdColumn) {
           // Insert with business_id column
-          await client.query(`
-            INSERT INTO categories (id, business_id, name, description) 
-            VALUES ($1, NULL, $2, $3) 
-            ON CONFLICT (business_id, name) DO NOTHING
-          `, [catId, cat.name, cat.description]);
+          try {
+            await client.query(`
+              INSERT INTO categories (id, business_id, name, description) 
+              VALUES ($1, NULL, $2, $3) 
+              ON CONFLICT DO NOTHING
+            `, [catId, cat.name, cat.description]);
+          } catch (conflictError) {
+            // If unique constraint fails, try without ON CONFLICT
+            try {
+              await client.query(`
+                INSERT INTO categories (id, business_id, name, description) 
+                VALUES ($1, NULL, $2, $3)
+              `, [catId, cat.name, cat.description]);
+            } catch (error) {
+              console.warn(`⚠️ Could not insert category ${cat.name}:`, error.message);
+            }
+          }
         } else {
-          // Insert without business_id column (backward compatibility)
-          await client.query(`
-            INSERT INTO categories (id, name, description) 
-            VALUES ($1, $2, $3) 
-            ON CONFLICT (name) DO NOTHING
-          `, [catId, cat.name, cat.description]);
+          // Insert without business_id column
+          try {
+            await client.query(`
+              INSERT INTO categories (id, name, description) 
+              VALUES ($1, $2, $3) 
+              ON CONFLICT DO NOTHING
+            `, [catId, cat.name, cat.description]);
+          } catch (conflictError) {
+            // If unique constraint fails, try without ON CONFLICT
+            try {
+              await client.query(`
+                INSERT INTO categories (id, name, description) 
+                VALUES ($1, $2, $3)
+              `, [catId, cat.name, cat.description]);
+            } catch (error) {
+              console.warn(`⚠️ Could not insert category ${cat.name}:`, error.message);
+            }
+          }
         }
       }
       console.log('✅ Default categories created');
@@ -630,6 +707,9 @@ const initializeDatabase = async () => {
   const client = await pool.connect();
   
   try {
+    // Ensure schema is set
+    await client.query(`SET search_path TO "${config.schema}", public`);
+    
     // Create and set schema
     await createSchema(client);
     
