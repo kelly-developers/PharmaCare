@@ -257,11 +257,12 @@ router.get('/:id', authenticate, async (req, res, next) => {
 });
 
 // POST /api/users - Create user
+// FIXED: Include business_id from the creating admin's business
 router.post('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
     const { name, email, password, role, phone } = req.body;
 
-    console.log('Creating user with data:', { name, email, password, role, phone });
+    console.log('Creating user with data:', { name, email, role, phone, businessId: req.user.business_id });
 
     if (!name || !email || !password || !role) {
       return res.status(400).json({ 
@@ -289,10 +290,11 @@ router.post('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
     const hashedPassword = await bcrypt.hash(password, 10);
     const id = uuidv4();
 
+    // FIXED: Include business_id when creating user so they belong to the same business
     await query(
-      `INSERT INTO users (id, username, email, password, name, role, phone, active, created_at, updated_at) 
-       VALUES ($1, $2, $3, $4, $5, $6, $7, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [id, username, email, hashedPassword, name, role.toUpperCase(), phone || null]
+      `INSERT INTO users (id, username, email, password, name, role, phone, business_id, active, created_at, updated_at) 
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [id, username, email, hashedPassword, name, role.toUpperCase(), phone || null, req.user.business_id || null]
     );
 
     const [newUser] = await query(
