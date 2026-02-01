@@ -213,11 +213,11 @@ const createV1Tables = async (client) => {
   await recordMigration(client, 1, 'Initial schema with businesses, users, categories, medicines, suppliers, stock movements, sales');
 };
 
-// V2: Additional tables
+// V2: Additional tables - FIXED: No 'title' column, only 'description'
 const createV2Tables = async (client) => {
   console.log('📋 Creating v2 tables (expenses, prescriptions)...');
 
-  // Expenses table - with business_id
+  // Expenses table - with business_id - FIXED: removed 'title' column
   await client.query(`
     CREATE TABLE IF NOT EXISTS expenses (
       id VARCHAR(36) PRIMARY KEY,
@@ -228,9 +228,11 @@ const createV2Tables = async (client) => {
       expense_date DATE NOT NULL,
       vendor VARCHAR(255),
       receipt_number VARCHAR(100),
+      receipt_url TEXT,
       notes TEXT,
       status VARCHAR(20) DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
       rejection_reason TEXT,
+      rejected_by VARCHAR(36),
       created_by VARCHAR(36),
       created_by_name VARCHAR(100),
       approved_by VARCHAR(36),
@@ -419,6 +421,7 @@ const createV4Indexes = async (client) => {
     { name: 'idx_sales_cashier', table: 'sales', column: 'cashier_id' },
     { name: 'idx_expenses_date', table: 'expenses', column: 'expense_date' },
     { name: 'idx_expenses_status', table: 'expenses', column: 'status' },
+    { name: 'idx_expenses_category', table: 'expenses', column: 'category' },
     { name: 'idx_prescriptions_status', table: 'prescriptions', column: 'status' },
     { name: 'idx_purchase_orders_status', table: 'purchase_orders', column: 'status' },
     { name: 'idx_purchase_orders_supplier', table: 'purchase_orders', column: 'supplier_id' },
@@ -692,6 +695,144 @@ const createV7FamilyPlanning = async (client) => {
   await recordMigration(client, 7, 'Added family_planning table for Depo, Herbal, Femi Plan tracking');
 };
 
+// V8: ADD MISSING COLUMNS AND FIX EXISTING TABLES
+const createV8MissingColumns = async (client) => {
+  console.log('📋 Creating v8 (adding missing columns and fixes)...');
+
+  // Check if we need to add 'title' column to expenses (to maintain backward compatibility)
+  // But actually we should NOT add it - we should use 'description' instead
+  // However, if the code expects it, we'll add it as nullable
+  
+  try {
+    // First check if 'title' column exists in expenses
+    const checkResult = await client.query(`
+      SELECT column_name 
+      FROM information_schema.columns 
+      WHERE table_schema = $1 AND table_name = 'expenses' AND column_name = 'title'
+    `, [config.schema || 'sme_platform']);
+
+    if (checkResult.rows.length === 0) {
+      console.log('⚠️ Adding "title" column to expenses for backward compatibility...');
+      await client.query(`
+        ALTER TABLE expenses ADD COLUMN IF NOT EXISTS title VARCHAR(255)
+      `);
+      console.log('✅ Added "title" column to expenses');
+    }
+  } catch (error) {
+    console.warn('⚠️ Could not add title column:', error.message);
+  }
+
+  // Ensure all necessary columns exist in expenses
+  const expenseColumns = [
+    { name: 'rejected_by', type: 'VARCHAR(36)' },
+    { name: 'receipt_url', type: 'TEXT' }
+  ];
+
+  for (const col of expenseColumns) {
+    try {
+      const checkResult = await client.query(`
+        SELECT column_name 
+        FROM information_schema.columns 
+        WHERE table_schema = $1 AND table_name = 'expenses' AND column_name = $2
+      `, [config.schema || 'sme_platform', col.name]);
+
+      if (checkResult.rows.length === 0) {
+        await client.query(`
+          ALTER TABLE expenses ADD COLUMN IF NOT EXISTS ${col.name} ${col.type}
+        `);
+        console.log(`✅ Added ${col.name} column to expenses`);
+      }
+    } catch (error) {
+      console.warn(`⚠️ Could not add ${col.name} column:`, error.message);
+    }
+  }
+
+  await recordMigration(client, 8, 'Added missing columns to expenses table');
+};
+
+// V9: DATE VALIDATION AND UTILITIES
+const createV9DateFunctions = async (client) => {
+  console.log('📋 Creating v9 (date validation functions)...');
+
+  // Create a function to validate dates
+  await client.query(`
+    CREATE OR REPLACE FUNCTION is_valid_date(date_str TEXT)
+    RETURNS BOOLEAN AS $$
+    DECLARE
+      parsed_date DATE;
+    BEGIN
+      BEGIN
+        parsed_date := date_str::DATE;
+        RETURN TRUE;
+      EXCEPTION WHEN OTHERS THEN
+        RETURN FALSE;
+      END;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
+  // Create a function to get the last day of month
+  await client.query(`
+    CREATE OR REPLACE FUNCTION last_day_of_month(date DATE)
+    RETURNS DATE AS $$
+    BEGIN
+      RETURN (DATE_TRUNC('MONTH', date) + INTERVAL '1 MONTH' - INTERVAL '1 day')::DATE;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
+  // Create a function to validate and fix dates
+  await client.query(`
+    CREATE OR REPLACE FUNCTION safe_date_or_default(date_str TEXT, default_date DATE DEFAULT CURRENT_DATE)
+    RETURNS DATE AS $$
+    DECLARE
+      year_val INT;
+      month_val INT;
+      day_val INT;
+      max_day INT;
+    BEGIN
+      -- First try to parse as-is
+      BEGIN
+        RETURN date_str::DATE;
+      EXCEPTION WHEN OTHERS THEN
+        -- Try to extract components and fix
+        BEGIN
+          year_val := SPLIT_PART(date_str, '-', 1)::INT;
+          month_val := SPLIT_PART(date_str, '-', 2)::INT;
+          day_val := SPLIT_PART(date_str, '-', 3)::INT;
+          
+          -- Validate month
+          IF month_val < 1 OR month_val > 12 THEN
+            month_val := EXTRACT(MONTH FROM default_date)::INT;
+          END IF;
+          
+          -- Get last day of month
+          max_day := EXTRACT(DAY FROM (DATE_TRUNC('MONTH', MAKE_DATE(year_val, month_val, 1)) + INTERVAL '1 MONTH' - INTERVAL '1 day'))::INT;
+          
+          -- Fix day if invalid
+          IF day_val < 1 OR day_val > max_day THEN
+            day_val := LEAST(max_day, EXTRACT(DAY FROM default_date)::INT);
+          END IF;
+          
+          -- Validate year
+          IF year_val < 1900 OR year_val > 2100 THEN
+            year_val := EXTRACT(YEAR FROM default_date)::INT;
+          END IF;
+          
+          RETURN MAKE_DATE(year_val, month_val, day_val);
+        EXCEPTION WHEN OTHERS THEN
+          RETURN default_date;
+        END;
+      END;
+    END;
+    $$ LANGUAGE plpgsql
+  `);
+
+  console.log('✅ Created date validation functions');
+  
+  await recordMigration(client, 9, 'Added date validation and utility functions');
+};
+
 // Migration definitions
 const migrations = [
   { version: 1, description: 'Initial schema', migrate: createV1Tables },
@@ -701,6 +842,8 @@ const migrations = [
   { version: 5, description: 'Audit triggers', migrate: createV5Triggers },
   { version: 6, description: 'Credit sales', migrate: createV6CreditSales },
   { version: 7, description: 'Family planning', migrate: createV7FamilyPlanning },
+  { version: 8, description: 'Missing columns', migrate: createV8MissingColumns },
+  { version: 9, description: 'Date validation', migrate: createV9DateFunctions },
 ];
 
 const initializeDatabase = async () => {
@@ -745,7 +888,8 @@ const initializeDatabase = async () => {
             console.log('');
           } catch (error) {
             console.error(`❌ Migration v${migration.version} failed:`, error.message);
-            // Don't throw error, continue with other migrations
+            console.error(error.stack);
+            // Continue with other migrations
           }
         }
       }
@@ -774,4 +918,78 @@ const initializeDatabase = async () => {
   }
 };
 
-module.exports = { initializeDatabase };
+// Function to check and add columns dynamically
+const checkAndAddMissingColumns = async (tableName, requiredColumns) => {
+  const client = await pool.connect();
+  try {
+    await client.query(`SET search_path TO "${config.schema}", public`);
+    
+    for (const column of requiredColumns) {
+      try {
+        const checkResult = await client.query(`
+          SELECT column_name 
+          FROM information_schema.columns 
+          WHERE table_schema = $1 AND table_name = $2 AND column_name = $3
+        `, [config.schema || 'sme_platform', tableName, column.name]);
+
+        if (checkResult.rows.length === 0) {
+          console.log(`📝 Adding missing column ${column.name} to ${tableName}`);
+          await client.query(`
+            ALTER TABLE ${tableName} ADD COLUMN IF NOT EXISTS ${column.name} ${column.type} ${column.default ? 'DEFAULT ' + column.default : ''}
+          `);
+          console.log(`✅ Added column ${column.name} to ${tableName}`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ Could not check/add column ${column.name} to ${tableName}:`, error.message);
+      }
+    }
+  } finally {
+    client.release();
+  }
+};
+
+// Function to validate and fix date
+const validateAndFixDate = (dateStr) => {
+  if (!dateStr) return new Date().toISOString().split('T')[0];
+  
+  try {
+    // Try to parse the date
+    const date = new Date(dateStr);
+    
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      throw new Error('Invalid date');
+    }
+    
+    // Extract year, month, day
+    const year = date.getFullYear();
+    const month = date.getMonth() + 1; // JavaScript months are 0-indexed
+    const day = date.getDate();
+    
+    // Check if month and day are valid
+    if (month < 1 || month > 12) {
+      throw new Error('Invalid month');
+    }
+    
+    // Get last day of month
+    const lastDay = new Date(year, month, 0).getDate();
+    
+    // If day is invalid (like 31 for February), fix it
+    const fixedDay = Math.min(day, lastDay);
+    
+    // Create fixed date
+    const fixedDate = new Date(year, month - 1, fixedDay);
+    return fixedDate.toISOString().split('T')[0];
+    
+  } catch (error) {
+    // Return current date if parsing fails
+    console.warn(`⚠️ Date validation failed for "${dateStr}": ${error.message}. Using current date.`);
+    return new Date().toISOString().split('T')[0];
+  }
+};
+
+module.exports = { 
+  initializeDatabase, 
+  checkAndAddMissingColumns,
+  validateAndFixDate 
+};

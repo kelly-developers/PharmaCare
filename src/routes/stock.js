@@ -8,6 +8,95 @@ const router = express.Router();
 // Helper to safely get first result
 const getFirst = (results) => results[0] || {};
 
+// Helper to validate and fix date parameters
+const validateAndFixDate = (dateStr) => {
+  if (!dateStr || typeof dateStr !== 'string') return null;
+  
+  try {
+    // Remove timezone part if present
+    const dateOnly = dateStr.split('T')[0];
+    const parts = dateOnly.split('-');
+    
+    if (parts.length !== 3) return dateStr;
+    
+    const year = parseInt(parts[0]);
+    const month = parseInt(parts[1]);
+    const day = parseInt(parts[2]);
+    
+    // Validate year
+    if (year < 1900 || year > 2100) {
+      // If year is invalid, use current year
+      const currentYear = new Date().getFullYear();
+      return `${currentYear}-${month.toString().padStart(2, '0')}-${Math.min(day, 28).toString().padStart(2, '0')}`;
+    }
+    
+    // Validate month
+    if (month < 1 || month > 12) {
+      // If month is invalid, use current month
+      const currentMonth = new Date().getMonth() + 1;
+      const currentYear = new Date().getFullYear();
+      // Get last day of current month
+      const lastDay = new Date(currentYear, currentMonth, 0).getDate();
+      return `${currentYear}-${currentMonth.toString().padStart(2, '0')}-${Math.min(day, lastDay).toString().padStart(2, '0')}`;
+    }
+    
+    // Get last day of the month
+    const lastDayOfMonth = new Date(year, month, 0).getDate();
+    
+    // Fix day if invalid
+    let fixedDay = day;
+    if (day < 1) {
+      fixedDay = 1;
+    } else if (day > lastDayOfMonth) {
+      fixedDay = lastDayOfMonth;
+    }
+    
+    return `${year}-${month.toString().padStart(2, '0')}-${fixedDay.toString().padStart(2, '0')}`;
+    
+  } catch (error) {
+    console.warn(`⚠️ Date validation failed for "${dateStr}":`, error.message);
+    // Return a safe default date (today)
+    const today = new Date();
+    return `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
+  }
+};
+
+// Helper to get safe date range
+const getSafeDateRange = (startDate, endDate) => {
+  const safeStartDate = validateAndFixDate(startDate);
+  const safeEndDate = validateAndFixDate(endDate);
+  
+  // Ensure end date is not before start date
+  if (safeStartDate && safeEndDate && safeEndDate < safeStartDate) {
+    return { startDate: safeEndDate, endDate: safeStartDate };
+  }
+  
+  return { startDate: safeStartDate, endDate: safeEndDate };
+};
+
+// Helper to get last day of month
+const getLastDayOfMonth = (year, month) => {
+  return new Date(year, month, 0).getDate();
+};
+
+// Helper to create safe date string for queries
+const createSafeDateQuery = (year, month, day = null) => {
+  const safeYear = year || new Date().getFullYear();
+  const safeMonth = Math.max(1, Math.min(12, month || new Date().getMonth() + 1));
+  
+  if (day) {
+    const lastDay = getLastDayOfMonth(safeYear, safeMonth);
+    const safeDay = Math.max(1, Math.min(day, lastDay));
+    return `${safeYear}-${safeMonth.toString().padStart(2, '0')}-${safeDay.toString().padStart(2, '0')}`;
+  } else {
+    const lastDay = getLastDayOfMonth(safeYear, safeMonth);
+    return {
+      startDate: `${safeYear}-${safeMonth.toString().padStart(2, '0')}-01`,
+      endDate: `${safeYear}-${safeMonth.toString().padStart(2, '0')}-${lastDay.toString().padStart(2, '0')}`
+    };
+  }
+};
+
 // GET /api/stock/health - Health check
 router.get('/health', async (req, res) => {
   res.json({ success: true, status: 'healthy', timestamp: new Date().toISOString() });
@@ -35,37 +124,41 @@ router.get('/recent', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
 router.get('/monthly', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { year, month } = req.query;
-    const currentYear = year || new Date().getFullYear();
-    const currentMonth = month || new Date().getMonth() + 1;
+    
+    // Use safe date creation
+    const { startDate, endDate } = createSafeDateQuery(
+      parseInt(year),
+      parseInt(month)
+    );
 
-    const startDate = `${currentYear}-${String(currentMonth).padStart(2, '0')}-01`;
-    const endDate = `${currentYear}-${String(currentMonth).padStart(2, '0')}-31`;
+    console.log(`📊 Monthly stock query for: ${startDate} to ${endDate}`);
 
     const [additionsResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
       WHERE type IN ('ADDITION', 'PURCHASE')
-      AND created_at BETWEEN $1 AND $2
+      AND DATE(created_at) BETWEEN $1 AND $2
     `, [startDate, endDate]);
 
     const [salesResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
       WHERE type = 'SALE'
-      AND created_at BETWEEN $1 AND $2
+      AND DATE(created_at) BETWEEN $1 AND $2
     `, [startDate, endDate]);
 
     res.json({
       success: true,
       data: {
-        year: parseInt(currentYear),
-        month: parseInt(currentMonth),
+        year: parseInt(year || new Date().getFullYear()),
+        month: parseInt(month || new Date().getMonth() + 1),
         totalAdditions: parseInt(getFirst(additionsResult).total) || 0,
         totalSales: parseInt(getFirst(salesResult).total) || 0,
         netChange: (parseInt(getFirst(additionsResult).total) || 0) - (parseInt(getFirst(salesResult).total) || 0)
       }
     });
   } catch (error) {
+    console.error('❌ Monthly stock error:', error);
     next(error);
   }
 });
@@ -75,12 +168,17 @@ router.get('/summary', authenticate, authorize('ADMIN', 'MANAGER'), async (req, 
   try {
     const { startDate, endDate } = req.query;
 
+    // Validate and fix dates
+    const { startDate: safeStartDate, endDate: safeEndDate } = getSafeDateRange(startDate, endDate);
+    
+    console.log(`📊 Stock summary query: ${safeStartDate || 'No start date'} to ${safeEndDate || 'No end date'}`);
+
     let dateFilter = '';
     const params = [];
 
-    if (startDate && endDate) {
-      dateFilter = 'AND created_at BETWEEN $1 AND $2';
-      params.push(startDate, endDate);
+    if (safeStartDate && safeEndDate) {
+      dateFilter = 'AND DATE(created_at) BETWEEN $1 AND $2';
+      params.push(safeStartDate, safeEndDate);
     }
 
     const [additionsResult] = await query(`
@@ -114,10 +212,15 @@ router.get('/summary', authenticate, authorize('ADMIN', 'MANAGER'), async (req, 
         totalAdditions: additions,
         totalSales: sales,
         totalLosses: losses,
-        netChange: additions - sales - losses
+        netChange: additions - sales - losses,
+        dateRange: {
+          startDate: safeStartDate,
+          endDate: safeEndDate
+        }
       }
     });
   } catch (error) {
+    console.error('❌ Stock summary error:', error);
     next(error);
   }
 });
@@ -165,13 +268,18 @@ router.get('/movements', authenticate, authorize('ADMIN', 'MANAGER'), async (req
     }
     
     if (startDate && endDate) {
+      // Validate and fix dates
+      const { startDate: safeStartDate, endDate: safeEndDate } = getSafeDateRange(startDate, endDate);
+      
       paramIndex++;
       whereClause += ` AND DATE(sm.created_at) >= $${paramIndex}`;
-      params.push(startDate);
+      params.push(safeStartDate);
       paramIndex++;
       whereClause += ` AND DATE(sm.created_at) <= $${paramIndex}`;
-      params.push(endDate);
+      params.push(safeEndDate);
     }
+
+    console.log(`📊 Stock movements query with params:`, params);
 
     const [movements] = await query(`
       SELECT sm.*
@@ -193,6 +301,7 @@ router.get('/movements', authenticate, authorize('ADMIN', 'MANAGER'), async (req
       }
     });
   } catch (error) {
+    console.error('❌ Stock movements error:', error);
     next(error);
   }
 });
@@ -230,16 +339,30 @@ router.get('/movements/medicine/:medicineId/filtered', authenticate, authorize('
       whereClause += ` AND sm.type = $${paramIndex}`;
       params.push(type);
     }
-    if (startDate) {
+    
+    if (startDate && endDate) {
+      // Validate and fix dates
+      const { startDate: safeStartDate, endDate: safeEndDate } = getSafeDateRange(startDate, endDate);
+      
       paramIndex++;
-      whereClause += ` AND sm.created_at >= $${paramIndex}`;
-      params.push(startDate);
-    }
-    if (endDate) {
+      whereClause += ` AND DATE(sm.created_at) >= $${paramIndex}`;
+      params.push(safeStartDate);
       paramIndex++;
-      whereClause += ` AND sm.created_at <= $${paramIndex}`;
-      params.push(endDate);
+      whereClause += ` AND DATE(sm.created_at) <= $${paramIndex}`;
+      params.push(safeEndDate);
+    } else if (startDate) {
+      const safeStartDate = validateAndFixDate(startDate);
+      paramIndex++;
+      whereClause += ` AND DATE(sm.created_at) >= $${paramIndex}`;
+      params.push(safeStartDate);
+    } else if (endDate) {
+      const safeEndDate = validateAndFixDate(endDate);
+      paramIndex++;
+      whereClause += ` AND DATE(sm.created_at) <= $${paramIndex}`;
+      params.push(safeEndDate);
     }
+
+    console.log(`📊 Filtered movements query for medicine ${req.params.medicineId} with params:`, params);
 
     const [movements] = await query(`
       SELECT sm.*
@@ -266,6 +389,7 @@ router.get('/movements/medicine/:medicineId/filtered', authenticate, authorize('
       }
     });
   } catch (error) {
+    console.error('❌ Filtered movements error:', error);
     next(error);
   }
 });
@@ -315,9 +439,14 @@ router.get('/net-movement/:medicineId', authenticate, authorize('ADMIN', 'MANAGE
     const params = [req.params.medicineId];
 
     if (startDate && endDate) {
-      dateFilter = 'AND created_at BETWEEN $2 AND $3';
-      params.push(startDate, endDate);
+      // Validate and fix dates
+      const { startDate: safeStartDate, endDate: safeEndDate } = getSafeDateRange(startDate, endDate);
+      
+      dateFilter = 'AND DATE(created_at) BETWEEN $2 AND $3';
+      params.push(safeStartDate, safeEndDate);
     }
+
+    console.log(`📊 Net movement query for medicine ${req.params.medicineId} with params:`, params);
 
     const [result] = await query(`
       SELECT 
@@ -344,6 +473,7 @@ router.get('/net-movement/:medicineId', authenticate, authorize('ADMIN', 'MANAGE
       }
     });
   } catch (error) {
+    console.error('❌ Net movement error:', error);
     next(error);
   }
 });
@@ -398,9 +528,20 @@ router.post('/loss', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
 
     res.json({
       success: true,
-      data: { id, medicine_id, type: 'LOSS', quantity, reason, notes, previous_stock: previousStock, new_stock: newStock }
+      data: { 
+        id, 
+        medicine_id, 
+        medicine_name: medicine.name,
+        type: 'LOSS', 
+        quantity, 
+        reason: reason || 'Stock loss', 
+        notes, 
+        previous_stock: previousStock, 
+        new_stock: newStock 
+      }
     });
   } catch (error) {
+    console.error('❌ Stock loss error:', error);
     next(error);
   }
 });
@@ -414,6 +555,12 @@ router.post('/adjustment', authenticate, authorize('ADMIN', 'MANAGER'), async (r
       return res.status(400).json({ success: false, error: 'Medicine ID and quantity are required' });
     }
 
+    // Validate quantity
+    const adjustedQuantity = parseInt(quantity);
+    if (isNaN(adjustedQuantity) || adjustedQuantity < 0) {
+      return res.status(400).json({ success: false, error: 'Valid positive quantity is required' });
+    }
+
     // Get current stock
     const [medicines] = await query('SELECT * FROM medicines WHERE id = $1', [medicine_id]);
     
@@ -423,7 +570,7 @@ router.post('/adjustment', authenticate, authorize('ADMIN', 'MANAGER'), async (r
 
     const medicine = medicines[0];
     const previousStock = medicine.stock_quantity;
-    const adjustment = quantity - previousStock;
+    const adjustment = adjustedQuantity - previousStock;
 
     // Get user name
     const [userResult] = await query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
@@ -432,7 +579,7 @@ router.post('/adjustment', authenticate, authorize('ADMIN', 'MANAGER'), async (r
     // Update medicine stock
     await query(
       'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [quantity, medicine_id]
+      [adjustedQuantity, medicine_id]
     );
 
     // Record stock movement
@@ -445,14 +592,23 @@ router.post('/adjustment', authenticate, authorize('ADMIN', 'MANAGER'), async (r
       VALUES ($1, $2, $3, 'ADJUSTMENT', $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
     `, [
       id, medicine_id, medicine.name, adjustment, reason || 'Stock adjustment', notes || null,
-      req.user.id, user.name || 'Unknown', user.role || 'UNKNOWN', previousStock, quantity
+      req.user.id, user.name || 'Unknown', user.role || 'UNKNOWN', previousStock, adjustedQuantity
     ]);
 
     res.json({
       success: true,
-      data: { id, medicine_id, type: 'ADJUSTMENT', previousQuantity: previousStock, newQuantity: quantity, adjustment }
+      data: { 
+        id, 
+        medicine_id, 
+        medicine_name: medicine.name,
+        type: 'ADJUSTMENT', 
+        previousQuantity: previousStock, 
+        newQuantity: adjustedQuantity, 
+        adjustment 
+      }
     });
   } catch (error) {
+    console.error('❌ Stock adjustment error:', error);
     next(error);
   }
 });
@@ -477,6 +633,8 @@ router.delete('/movements/:id', authenticate, authorize('ADMIN'), async (req, re
       stockChange = movement.quantity;
     }
 
+    console.log(`🗑️ Reversing stock movement ${req.params.id} for medicine ${movement.medicine_id}: ${stockChange}`);
+
     await query(
       'UPDATE medicines SET stock_quantity = stock_quantity + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [stockChange, movement.medicine_id]
@@ -486,6 +644,47 @@ router.delete('/movements/:id', authenticate, authorize('ADMIN'), async (req, re
 
     res.json({ success: true, message: 'Stock movement deleted and reversed' });
   } catch (error) {
+    console.error('❌ Delete stock movement error:', error);
+    next(error);
+  }
+});
+
+// GET /api/stock/low-stock - Get medicines with low stock
+router.get('/low-stock', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const [medicines] = await query(`
+      SELECT id, name, generic_name, category, stock_quantity, reorder_level, cost_price, unit_price
+      FROM medicines
+      WHERE stock_quantity <= reorder_level
+      ORDER BY stock_quantity ASC
+    `);
+
+    res.json({ success: true, data: medicines });
+  } catch (error) {
+    console.error('❌ Low stock query error:', error);
+    next(error);
+  }
+});
+
+// GET /api/stock/expiring - Get medicines expiring soon
+router.get('/expiring', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const days = parseInt(req.query.days) || 30;
+    const today = new Date().toISOString().split('T')[0];
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + days);
+    const futureDateStr = futureDate.toISOString().split('T')[0];
+
+    const [medicines] = await query(`
+      SELECT id, name, generic_name, category, stock_quantity, expiry_date, cost_price, unit_price
+      FROM medicines
+      WHERE expiry_date BETWEEN $1 AND $2
+      ORDER BY expiry_date ASC
+    `, [today, futureDateStr]);
+
+    res.json({ success: true, data: medicines });
+  } catch (error) {
+    console.error('❌ Expiring stock query error:', error);
     next(error);
   }
 });
