@@ -584,111 +584,8 @@ router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
   }
 });
 
-// GET /api/sales/:id - Get sale by ID
-router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
-  try {
-    const [sales] = await query(`
-      SELECT 
-        s.*,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'id', si.id,
-              'medicine_id', si.medicine_id,
-              'medicine_name', si.medicine_name,
-              'quantity', si.quantity,
-              'unit_type', si.unit_type,
-              'unit_label', si.unit_label,
-              'unit_price', si.unit_price,
-              'cost_price', si.cost_price,
-              'subtotal', si.subtotal,
-              'profit', si.profit
-            )
-          ) FILTER (WHERE si.id IS NOT NULL), '[]'
-        ) as items
-      FROM sales s
-      LEFT JOIN sale_items si ON s.id = si.sale_id
-      WHERE s.id = $1
-      GROUP BY s.id
-    `, [req.params.id]);
-
-    if (sales.length === 0) {
-      return res.status(404).json({ success: false, error: 'Sale not found' });
-    }
-
-    res.json({ success: true, data: sales[0] });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// DELETE /api/sales/:id - Delete sale (void)
-router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) => {
-  const client = await pool.connect();
-  
-  try {
-    await client.query('BEGIN');
-    
-    const config = require('../config/database').config;
-    await client.query(`SET search_path TO ${config.schema}, public`);
-    
-    // Get sale items to reverse stock
-    const itemsResult = await client.query('SELECT * FROM sale_items WHERE sale_id = $1', [req.params.id]);
-    const items = itemsResult.rows;
-
-    // Get user info
-    const userResult = await client.query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
-    const user = userResult.rows[0] || { name: 'Unknown', role: 'UNKNOWN' };
-
-    // Reverse stock changes
-    for (const item of items) {
-      // Get current stock
-      const stockResult = await client.query(
-        'SELECT stock_quantity FROM medicines WHERE id = $1',
-        [item.medicine_id]
-      );
-      const previousStock = parseInt(stockResult.rows[0]?.stock_quantity) || 0;
-      const newStock = previousStock + item.quantity;
-
-      await client.query(
-        'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-        [newStock, item.medicine_id]
-      );
-      
-      // Record reversal    movement
-      const movementId = uuidv4();
-      await client.query(`
-        INSERT INTO stock_movements (
-          id, medicine_id, medicine_name, type, quantity, reference_id, reason,
-          created_by, performed_by_name, performed_by_role, previous_stock, new_stock, created_at
-        )
-        VALUES ($1, $2, $3, 'ADJUSTMENT', $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
-      `, [
-        movementId, item.medicine_id, item.medicine_name, item.quantity,
-        req.params.id, 'Sale voided', req.user.id, user.name, user.role,
-        previousStock, newStock
-      ]);
-    }
-
-    // Delete sale items and sale
-    await client.query('DELETE FROM sale_items WHERE sale_id = $1', [req.params.id]);
-    await client.query('DELETE FROM sales WHERE id = $1', [req.params.id]);
-    
-    // Delete related stock movements for the original sale
-    await client.query("DELETE FROM stock_movements WHERE reference_id = $1 AND type = 'SALE'", [req.params.id]);
-
-    await client.query('COMMIT');
-
-    res.json({ success: true, message: 'Sale voided successfully' });
-  } catch (error) {
-    await client.query('ROLLBACK');
-    next(error);
-  } finally {
-    client.release();
-  }
-});
-
 // =================== CREDIT SALES ENDPOINTS ===================
+// NOTE: These MUST come BEFORE /:id route to prevent /credit being matched as an ID
 
 // GET /api/sales/credit - Get all credit sales
 router.get('/credit', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
@@ -980,6 +877,116 @@ router.post('/credit/payment', authenticate, authorize('ADMIN', 'MANAGER', 'CASH
 
   } catch (error) {
     await client.query('ROLLBACK').catch(e => console.error('Rollback error:', e));
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+// =================== END CREDIT SALES ENDPOINTS ===================
+
+// GET /api/sales/:id - Get sale by ID
+router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+  try {
+    const [sales] = await query(`
+      SELECT 
+        s.*,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', si.id,
+              'medicine_id', si.medicine_id,
+              'medicine_name', si.medicine_name,
+              'quantity', si.quantity,
+              'unit_type', si.unit_type,
+              'unit_label', si.unit_label,
+              'unit_price', si.unit_price,
+              'cost_price', si.cost_price,
+              'subtotal', si.subtotal,
+              'profit', si.profit
+            )
+          ) FILTER (WHERE si.id IS NOT NULL), '[]'
+        ) as items
+      FROM sales s
+      LEFT JOIN sale_items si ON s.id = si.sale_id
+      WHERE s.id = $1
+      GROUP BY s.id
+    `, [req.params.id]);
+
+    if (sales.length === 0) {
+      return res.status(404).json({ success: false, error: 'Sale not found' });
+    }
+
+    res.json({ success: true, data: sales[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// DELETE /api/sales/:id - Delete sale (void)
+router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) => {
+  const client = await pool.connect();
+  
+  try {
+    await client.query('BEGIN');
+    
+    const config = require('../config/database').config;
+    await client.query(`SET search_path TO ${config.schema}, public`);
+    
+    // Get sale items to reverse stock
+    const itemsResult = await client.query('SELECT * FROM sale_items WHERE sale_id = $1', [req.params.id]);
+    const items = itemsResult.rows;
+
+    // Get user info
+    const userResult = await client.query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
+    const user = userResult.rows[0] || { name: 'Unknown', role: 'UNKNOWN' };
+
+    // Reverse stock changes
+    for (const item of items) {
+      // Get current stock
+      const stockResult = await client.query(
+        'SELECT stock_quantity FROM medicines WHERE id = $1',
+        [item.medicine_id]
+      );
+      const previousStock = parseInt(stockResult.rows[0]?.stock_quantity) || 0;
+      const newStock = previousStock + item.quantity;
+
+      await client.query(
+        'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+        [newStock, item.medicine_id]
+      );
+      
+      // Record reversal movement
+      const movementId = uuidv4();
+      await client.query(`
+        INSERT INTO stock_movements (
+          id, medicine_id, medicine_name, type, quantity, reference_id, reason,
+          created_by, performed_by_name, performed_by_role, previous_stock, new_stock, created_at
+        )
+        VALUES ($1, $2, $3, 'ADJUSTMENT', $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      `, [
+        movementId, item.medicine_id, item.medicine_name, item.quantity,
+        req.params.id, 'Sale voided', req.user.id, user.name, user.role,
+        previousStock, newStock
+      ]);
+    }
+
+    // Delete related credit sale if exists
+    await client.query('DELETE FROM credit_payments WHERE credit_sale_id IN (SELECT id FROM credit_sales WHERE sale_id = $1)', [req.params.id]);
+    await client.query('DELETE FROM credit_sales WHERE sale_id = $1', [req.params.id]);
+
+    // Delete sale items and sale
+    await client.query('DELETE FROM sale_items WHERE sale_id = $1', [req.params.id]);
+    await client.query('DELETE FROM sales WHERE id = $1', [req.params.id]);
+    
+    // Delete related stock movements for the original sale
+    await client.query("DELETE FROM stock_movements WHERE reference_id = $1 AND type = 'SALE'", [req.params.id]);
+
+    await client.query('COMMIT');
+
+    res.json({ success: true, message: 'Sale voided successfully' });
+  } catch (error) {
+    await client.query('ROLLBACK');
     next(error);
   } finally {
     client.release();
