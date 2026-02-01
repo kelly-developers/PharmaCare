@@ -34,10 +34,10 @@ const createEmergencySuperAdmin = async () => {
     
     // Define super admin credentials
     const superAdminCredentials = {
-      email: 'superadmin@system.com',
-      password: 'SuperSecure123!',
-      username: 'superadmin',
-      name: 'System Administrator'
+      email: 'kellynyachiro@gmail.com',
+      password: 'Kelly@40125507',
+      username: 'Kelly',
+      name: 'Kelly Nyachiro'
     };
     
     console.log('\n🔑 Super Admin Credentials:');
@@ -140,8 +140,8 @@ const createEmergencySuperAdmin = async () => {
     console.log('\n🎉 EMERGENCY SUPER ADMIN SETUP COMPLETE!');
     console.log('\n📋 LOGIN INSTRUCTIONS:');
     console.log('   1. Go to your login page');
-    console.log('   2. Enter email: superadmin@system.com');
-    console.log('   3. Enter password: SuperSecure123!');
+    console.log('   2. Enter email: kellynyachiro@gmail.com');
+    console.log('   3. Enter password: Kelly@40125507');
     console.log('   4. Click Login');
     
   } catch (error) {

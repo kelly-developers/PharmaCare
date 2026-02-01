@@ -39,7 +39,7 @@ const checkSuperAdmin = async () => {
     });
     
     // Check for super admin
-    const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'superadmin@system.com';
+    const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'kellynyachiro@gmail.com';
     const result = await client.query(
       'SELECT id, email, username, name, role, password FROM users WHERE email = $1 OR role = $2',
       [superAdminEmail, 'SUPER_ADMIN']

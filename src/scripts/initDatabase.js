@@ -485,9 +485,9 @@ const createDefaultData = async (client) => {
   console.log('📥 Creating default data...');
 
   // ALWAYS CREATE SUPER ADMIN - No conditions, just create it
-  const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'superadmin@system.com';
-  const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'SuperSecure123!';
-  const superAdminName = process.env.SUPER_ADMIN_NAME || 'System Administrator';
+  const superAdminEmail = process.env.SUPER_ADMIN_EMAIL || 'kellynyachiro@gmail.com';
+  const superAdminPassword = process.env.SUPER_ADMIN_PASSWORD || 'Kelly@40125507';
+  const superAdminName = process.env.SUPER_ADMIN_NAME || 'Kelly Nyachiro';
   
   console.log('👑 Creating super admin user...');
   console.log(`   Email: ${superAdminEmail}`);
@@ -906,8 +906,8 @@ const initializeDatabase = async () => {
     console.log('🎉 Database initialization complete!');
     console.log('');
     console.log('🔑 Super Admin Login:');
-    console.log(`   Email: ${process.env.SUPER_ADMIN_EMAIL || 'superadmin@system.com'}`);
-    console.log(`   Password: ${process.env.SUPER_ADMIN_PASSWORD ? '********' : 'SuperSecure123!'}`);
+    console.log(`   Email: ${process.env.SUPER_ADMIN_EMAIL || 'kellynyachiro@gmail.com'}`);
+    console.log(`   Password: ${process.env.SUPER_ADMIN_PASSWORD ? '********' : 'Kelly@40125507'}`);
 
   } catch (error) {
     console.error('❌ Database initialization error:', error.message);
