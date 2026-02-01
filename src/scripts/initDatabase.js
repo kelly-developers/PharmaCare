@@ -601,6 +601,57 @@ const createDefaultData = async (client) => {
   }
 };
 
+// V6: Credit Sales tables
+const createV6CreditSales = async (client) => {
+  console.log('📋 Creating v6 tables (credit sales)...');
+
+  // Credit sales table - tracks credit purchases
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS credit_sales (
+      id VARCHAR(36) PRIMARY KEY,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
+      sale_id VARCHAR(36) REFERENCES sales(id) ON DELETE CASCADE,
+      customer_id VARCHAR(36),
+      customer_name VARCHAR(100) NOT NULL,
+      customer_phone VARCHAR(50) NOT NULL,
+      total_amount DECIMAL(10, 2) NOT NULL,
+      paid_amount DECIMAL(10, 2) DEFAULT 0,
+      balance_amount DECIMAL(10, 2) NOT NULL,
+      status VARCHAR(20) DEFAULT 'PENDING' CHECK (status IN ('PENDING', 'PARTIAL', 'PAID')),
+      due_date DATE,
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Credit payments table - tracks payments made against credit sales
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS credit_payments (
+      id VARCHAR(36) PRIMARY KEY,
+      credit_sale_id VARCHAR(36) REFERENCES credit_sales(id) ON DELETE CASCADE,
+      amount DECIMAL(10, 2) NOT NULL,
+      payment_method VARCHAR(20) DEFAULT 'CASH' CHECK (payment_method IN ('CASH', 'CARD', 'MPESA')),
+      received_by VARCHAR(36),
+      received_by_name VARCHAR(100),
+      notes TEXT,
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Add indexes for credit tables
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_credit_sales_business ON credit_sales(business_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_credit_sales_customer ON credit_sales(customer_phone)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_credit_sales_status ON credit_sales(status)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_credit_payments_credit_sale ON credit_payments(credit_sale_id)`);
+  } catch (error) {
+    console.warn('⚠️ Could not create credit indexes:', error.message);
+  }
+
+  await recordMigration(client, 6, 'Added credit_sales and credit_payments tables');
+};
+
 // Migration definitions
 const migrations = [
   { version: 1, description: 'Initial schema', migrate: createV1Tables },
@@ -608,6 +659,7 @@ const migrations = [
   { version: 3, description: 'Purchase orders and employees', migrate: createV3Tables },
   { version: 4, description: 'Indexes and constraints', migrate: createV4Indexes },
   { version: 5, description: 'Audit triggers', migrate: createV5Triggers },
+  { version: 6, description: 'Credit sales', migrate: createV6CreditSales },
 ];
 
 const initializeDatabase = async () => {

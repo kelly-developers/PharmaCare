@@ -35,10 +35,11 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
   const client = await pool.connect();
   
   try {
-    const { items, payment_method, customer_name, customer_phone, discount, notes, idempotency_key } = req.body;
+    const { items, payment_method, customer_name, customer_phone, discount, notes, idempotency_key, due_date } = req.body;
 
     console.log('🚀 Creating sale request received');
     console.log('📦 Items count:', items?.length || 0);
+    console.log('💳 Payment method:', payment_method);
 
     // Check for duplicate request using idempotency key
     const requestKey = idempotency_key || `${req.user.id}-${JSON.stringify(items)}-${Date.now()}`;
@@ -53,6 +54,15 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
 
     if (!items || items.length === 0) {
       return res.status(400).json({ success: false, error: 'Sale items are required' });
+    }
+
+    // Validate credit sales require customer info
+    const isCredit = (payment_method || 'CASH').toUpperCase() === 'CREDIT';
+    if (isCredit && (!customer_name || !customer_phone)) {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Customer name and phone are required for credit sales' 
+      });
     }
 
     // Mark this request as processing
@@ -206,6 +216,32 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
       ]);
     }
 
+    // If this is a credit sale, create credit record
+    let creditSaleId = null;
+    if (isCredit) {
+      creditSaleId = uuidv4();
+      const dueDateValue = due_date ? new Date(due_date) : null;
+      
+      await client.query(`
+        INSERT INTO credit_sales (
+          id, business_id, sale_id, customer_name, customer_phone,
+          total_amount, paid_amount, balance_amount, status, due_date, notes, created_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, 0, $6, 'PENDING', $7, $8, CURRENT_TIMESTAMP)
+      `, [
+        creditSaleId,
+        req.user.business_id || null,
+        saleId,
+        safeCustomerName,
+        safeCustomerPhone,
+        finalAmount,
+        dueDateValue,
+        notes || null
+      ]);
+      
+      console.log('📋 Credit sale record created:', creditSaleId);
+    }
+
     // Commit transaction
     await client.query('COMMIT');
     console.log('🎉 Transaction committed!');
@@ -253,9 +289,11 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
         customer_phone: safeCustomerPhone,
         notes: notes || null,
         created_at: createdSale?.created_at,
-        items: createdSale?.items || []
+        items: createdSale?.items || [],
+        is_credit: isCredit,
+        credit_sale_id: creditSaleId
       },
-      message: 'Sale created successfully'
+      message: isCredit ? 'Credit sale created successfully' : 'Sale created successfully'
     });
 
   } catch (error) {
@@ -594,6 +632,304 @@ router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) =
     res.json({ success: true, message: 'Sale voided successfully' });
   } catch (error) {
     await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+// =================== CREDIT SALES ENDPOINTS ===================
+
+// GET /api/sales/credit - Get all credit sales
+router.get('/credit', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { status, customerId } = req.query;
+    
+    let whereClause = '1=1';
+    const params = [];
+    let paramIndex = 0;
+    
+    // Add business_id filter if user has one
+    if (req.user.business_id) {
+      paramIndex++;
+      whereClause += ` AND cs.business_id = $${paramIndex}`;
+      params.push(req.user.business_id);
+    }
+    
+    if (status) {
+      paramIndex++;
+      whereClause += ` AND cs.status = $${paramIndex}`;
+      params.push(status.toUpperCase());
+    }
+    
+    if (customerId) {
+      paramIndex++;
+      whereClause += ` AND cs.customer_phone = $${paramIndex}`;
+      params.push(customerId);
+    }
+
+    const [credits] = await query(`
+      SELECT 
+        cs.*,
+        s.cashier_name,
+        s.created_at as sale_created_at,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', cp.id,
+              'amount', cp.amount,
+              'payment_method', cp.payment_method,
+              'received_by_name', cp.received_by_name,
+              'created_at', cp.created_at,
+              'notes', cp.notes
+            )
+          ) FILTER (WHERE cp.id IS NOT NULL), '[]'
+        ) as payments
+      FROM credit_sales cs
+      LEFT JOIN sales s ON cs.sale_id = s.id
+      LEFT JOIN credit_payments cp ON cs.id = cp.credit_sale_id
+      WHERE ${whereClause}
+      GROUP BY cs.id, s.cashier_name, s.created_at
+      ORDER BY cs.created_at DESC
+    `, params);
+
+    res.json({
+      success: true,
+      data: {
+        content: credits || [],
+        total: credits?.length || 0
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/sales/credit/summary - Get credit sales summary
+router.get('/credit/summary', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    let whereClause = '1=1';
+    const params = [];
+    
+    if (req.user.business_id) {
+      whereClause += ` AND business_id = $1`;
+      params.push(req.user.business_id);
+    }
+
+    const [summary] = await query(`
+      SELECT 
+        COALESCE(SUM(balance_amount), 0) as total_outstanding,
+        COUNT(*) as total_credits,
+        COUNT(*) FILTER (WHERE status = 'PENDING') as pending_count,
+        COUNT(*) FILTER (WHERE status = 'PARTIAL') as partial_count,
+        COUNT(*) FILTER (WHERE status = 'PAID') as paid_count
+      FROM credit_sales
+      WHERE ${whereClause}
+    `, params);
+
+    const result = summary[0] || {};
+
+    res.json({
+      success: true,
+      data: {
+        total_outstanding: parseFloat(result.total_outstanding) || 0,
+        total_credits: parseInt(result.total_credits) || 0,
+        pending_count: parseInt(result.pending_count) || 0,
+        partial_count: parseInt(result.partial_count) || 0,
+        paid_count: parseInt(result.paid_count) || 0
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/sales/credit/customer/:phone - Get customer credit history
+router.get('/credit/customer/:phone', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
+  try {
+    let whereClause = 'cs.customer_phone = $1';
+    const params = [req.params.phone];
+    
+    if (req.user.business_id) {
+      whereClause += ` AND cs.business_id = $2`;
+      params.push(req.user.business_id);
+    }
+
+    const [credits] = await query(`
+      SELECT 
+        cs.*,
+        s.cashier_name,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', cp.id,
+              'amount', cp.amount,
+              'payment_method', cp.payment_method,
+              'received_by_name', cp.received_by_name,
+              'created_at', cp.created_at
+            )
+          ) FILTER (WHERE cp.id IS NOT NULL), '[]'
+        ) as payments
+      FROM credit_sales cs
+      LEFT JOIN sales s ON cs.sale_id = s.id
+      LEFT JOIN credit_payments cp ON cs.id = cp.credit_sale_id
+      WHERE ${whereClause}
+      GROUP BY cs.id, s.cashier_name
+      ORDER BY cs.created_at DESC
+    `, params);
+
+    res.json({
+      success: true,
+      data: credits || []
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /api/sales/credit/:id - Get credit sale by ID
+router.get('/credit/:id', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
+  try {
+    const [credits] = await query(`
+      SELECT 
+        cs.*,
+        s.cashier_name,
+        s.total_amount as sale_total,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', cp.id,
+              'amount', cp.amount,
+              'payment_method', cp.payment_method,
+              'received_by_name', cp.received_by_name,
+              'created_at', cp.created_at,
+              'notes', cp.notes
+            )
+          ) FILTER (WHERE cp.id IS NOT NULL), '[]'
+        ) as payments
+      FROM credit_sales cs
+      LEFT JOIN sales s ON cs.sale_id = s.id
+      LEFT JOIN credit_payments cp ON cs.id = cp.credit_sale_id
+      WHERE cs.id = $1
+      GROUP BY cs.id, s.cashier_name, s.total_amount
+    `, [req.params.id]);
+
+    if (!credits || credits.length === 0) {
+      return res.status(404).json({ success: false, error: 'Credit sale not found' });
+    }
+
+    res.json({
+      success: true,
+      data: credits[0]
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /api/sales/credit/payment - Record a payment for a credit sale
+router.post('/credit/payment', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
+  const client = await pool.connect();
+  
+  try {
+    const { credit_sale_id, amount, payment_method, notes } = req.body;
+    
+    if (!credit_sale_id || !amount) {
+      return res.status(400).json({ success: false, error: 'Credit sale ID and amount are required' });
+    }
+    
+    if (amount <= 0) {
+      return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    }
+
+    await client.query('BEGIN');
+    
+    const config = require('../config/database').config;
+    await client.query(`SET search_path TO ${config.schema}, public`);
+
+    // Get current credit sale
+    const creditResult = await client.query(
+      'SELECT * FROM credit_sales WHERE id = $1',
+      [credit_sale_id]
+    );
+
+    if (creditResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Credit sale not found' });
+    }
+
+    const credit = creditResult.rows[0];
+    const paymentAmount = parseFloat(amount);
+    
+    if (paymentAmount > parseFloat(credit.balance_amount)) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ 
+        success: false, 
+        error: `Payment amount (${paymentAmount}) exceeds balance (${credit.balance_amount})` 
+      });
+    }
+
+    // Get user info
+    const userResult = await client.query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    const userName = userResult.rows[0]?.name || 'Unknown';
+
+    // Create payment record
+    const paymentId = uuidv4();
+    await client.query(`
+      INSERT INTO credit_payments (id, credit_sale_id, amount, payment_method, received_by, received_by_name, notes)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [
+      paymentId,
+      credit_sale_id,
+      paymentAmount,
+      (payment_method || 'CASH').toUpperCase(),
+      req.user.id,
+      userName,
+      notes || null
+    ]);
+
+    // Update credit sale balances
+    const newPaidAmount = parseFloat(credit.paid_amount) + paymentAmount;
+    const newBalanceAmount = parseFloat(credit.total_amount) - newPaidAmount;
+    const newStatus = newBalanceAmount <= 0 ? 'PAID' : (newPaidAmount > 0 ? 'PARTIAL' : 'PENDING');
+
+    await client.query(`
+      UPDATE credit_sales 
+      SET paid_amount = $1, balance_amount = $2, status = $3, updated_at = CURRENT_TIMESTAMP
+      WHERE id = $4
+    `, [newPaidAmount, newBalanceAmount, newStatus, credit_sale_id]);
+
+    await client.query('COMMIT');
+
+    // Fetch updated credit sale
+    const [updatedCredits] = await query(`
+      SELECT 
+        cs.*,
+        COALESCE(
+          json_agg(
+            json_build_object(
+              'id', cp.id,
+              'amount', cp.amount,
+              'payment_method', cp.payment_method,
+              'received_by_name', cp.received_by_name,
+              'created_at', cp.created_at
+            )
+          ) FILTER (WHERE cp.id IS NOT NULL), '[]'
+        ) as payments
+      FROM credit_sales cs
+      LEFT JOIN credit_payments cp ON cs.id = cp.credit_sale_id
+      WHERE cs.id = $1
+      GROUP BY cs.id
+    `, [credit_sale_id]);
+
+    res.json({
+      success: true,
+      data: updatedCredits[0],
+      message: newStatus === 'PAID' ? 'Credit fully paid!' : 'Payment recorded successfully'
+    });
+
+  } catch (error) {
+    await client.query('ROLLBACK').catch(e => console.error('Rollback error:', e));
     next(error);
   } finally {
     client.release();
