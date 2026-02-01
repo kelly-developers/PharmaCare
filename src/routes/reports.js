@@ -10,16 +10,25 @@ const getFirst = (results) => results[0] || {};
 // GET /api/reports/dashboard - Get dashboard summary
 router.get('/dashboard', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
-    // Today's sales - FIXED: using final_amount instead of total
+    // Today's sales - FIXED: Exclude CREDIT sales from totals until paid
     const [salesResult] = await query(`
       SELECT 
         COUNT(*) as transaction_count,
-        COALESCE(SUM(final_amount), 0) as total_sales,
-        COALESCE(SUM(profit), 0) as total_profit
+        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN final_amount ELSE 0 END), 0) as total_sales,
+        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN profit ELSE 0 END), 0) as total_profit,
+        COALESCE(SUM(CASE WHEN payment_method = 'CREDIT' THEN final_amount ELSE 0 END), 0) as credit_sales
       FROM sales
       WHERE DATE(created_at) = CURRENT_DATE
     `);
     const salesData = getFirst(salesResult);
+    
+    // Add paid credit sales from today
+    const [paidCreditResult] = await query(`
+      SELECT COALESCE(SUM(cp.amount), 0) as paid_credit_today
+      FROM credit_payments cp
+      WHERE DATE(cp.created_at) = CURRENT_DATE
+    `);
+    const paidCreditToday = parseFloat(getFirst(paidCreditResult).paid_credit_today) || 0;
 
     // Stock summary
     const [stockResult] = await query(`
@@ -91,10 +100,12 @@ router.get('/dashboard', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST
     res.json({
       success: true,
       data: {
-        // Today's metrics
-        todaySales: parseFloat(salesData.total_sales) || 0,
+        // Today's metrics - FIXED: Include paid credit sales in totals
+        todaySales: (parseFloat(salesData.total_sales) || 0) + paidCreditToday,
         todayTransactions: parseInt(salesData.transaction_count) || 0,
         todayProfit: parseFloat(salesData.total_profit) || 0,
+        todayCreditSales: parseFloat(salesData.credit_sales) || 0,
+        paidCreditToday: paidCreditToday,
         
         // Monthly profit data
         thisMonthProfit: currentMonthProfit,
@@ -291,29 +302,39 @@ router.get('/balance-sheet', authenticate, authorize('ADMIN', 'MANAGER'), async 
 });
 
 // GET /api/reports/income-statement - Get income statement
+// FIXED: Exclude CREDIT sales from totals until paid, add paid credit payments
 router.get('/income-statement', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
     const start = startDate || new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0];
     const end = endDate || new Date().toISOString().split('T')[0];
 
-    // Revenue - FIXED: using subtotal for gross sales (from sale_items)
+    // Revenue - FIXED: Exclude CREDIT sales from totals
     const [revenueResult] = await query(`
       SELECT 
-        COALESCE(SUM(total_amount), 0) as gross_sales,
-        COALESCE(SUM(discount), 0) as discounts,
-        COALESCE(SUM(final_amount), 0) as net_sales
+        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN total_amount ELSE 0 END), 0) as gross_sales,
+        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN discount ELSE 0 END), 0) as discounts,
+        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN final_amount ELSE 0 END), 0) as net_sales,
+        COALESCE(SUM(CASE WHEN payment_method = 'CREDIT' THEN final_amount ELSE 0 END), 0) as credit_sales
       FROM sales
       WHERE DATE(created_at) BETWEEN $1 AND $2
     `, [start, end]);
     const revenue = getFirst(revenueResult);
 
-    // Cost of goods sold - FIXED: need to calculate from sale_items
+    // Add paid credit payments for the period
+    const [paidCreditResult] = await query(`
+      SELECT COALESCE(SUM(cp.amount), 0) as paid_credit
+      FROM credit_payments cp
+      WHERE DATE(cp.created_at) BETWEEN $1 AND $2
+    `, [start, end]);
+    const paidCredit = parseFloat(getFirst(paidCreditResult).paid_credit) || 0;
+
+    // Cost of goods sold - FIXED: Exclude CREDIT sales from COGS until paid
     const [cogsResult] = await query(`
       SELECT COALESCE(SUM(si.quantity * si.cost_price), 0) as value
       FROM sale_items si
       JOIN sales s ON si.sale_id = s.id
-      WHERE DATE(s.created_at) BETWEEN $1 AND $2
+      WHERE DATE(s.created_at) BETWEEN $1 AND $2 AND s.payment_method != 'CREDIT'
     `, [start, end]);
     const cogsValue = parseFloat(getFirst(cogsResult).value) || 0;
 
@@ -326,7 +347,7 @@ router.get('/income-statement', authenticate, authorize('ADMIN', 'MANAGER'), asy
     `, [start, end]);
 
     const totalExpenses = expenseBreakdown.reduce((sum, e) => sum + parseFloat(e.total), 0);
-    const netSales = parseFloat(revenue.net_sales) || 0;
+    const netSales = (parseFloat(revenue.net_sales) || 0) + paidCredit;
     const grossProfit = netSales - cogsValue;
     const netIncome = grossProfit - totalExpenses;
 

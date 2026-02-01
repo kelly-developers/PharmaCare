@@ -173,10 +173,12 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res,
 });
 
 // POST /api/expenses - Create expense
-// FIXED: Add business_id for multi-tenancy
+// FIXED: Add business_id for multi-tenancy and handle date field properly
 router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
   try {
-    const { category, title, description, amount, date, vendor, receipt_number, receipt_url, notes } = req.body;
+    const { category, title, description, amount, date, vendor, receipt_number, receipt_url, notes, createdBy, createdByRole } = req.body;
+
+    console.log('📝 Expense creation request:', req.body);
 
     if (!category || !amount) {
       return res.status(400).json({ success: false, error: 'Category and amount are required' });
@@ -187,26 +189,34 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (
 
     // Get user name
     const [userResult] = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
-    const createdByName = getFirst(userResult).name || 'Unknown';
+    const createdByName = createdBy || getFirst(userResult).name || 'Unknown';
 
     const id = uuidv4();
-    const expenseDate = date || new Date().toISOString().split('T')[0];
+    // FIXED: Handle date properly - accept various formats
+    let expenseDate;
+    if (date) {
+      // Handle both ISO string and date-only formats
+      const dateStr = typeof date === 'string' ? date : date.toString();
+      expenseDate = dateStr.split('T')[0]; // Extract just the date part
+    } else {
+      expenseDate = new Date().toISOString().split('T')[0];
+    }
 
     console.log('📝 Creating expense:', { id, category, title: expenseTitle, amount, date: expenseDate, businessId: req.user.business_id });
 
     await query(`
       INSERT INTO expenses (
-        id, business_id, category, title, description, amount, date, expense_date, vendor, 
+        id, business_id, category, title, description, amount, expense_date, vendor, 
         receipt_number, receipt_url, notes, status, created_by, created_by_name, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11, 'APPROVED', $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'APPROVED', $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, [
       id, 
       req.user.business_id || null,
       category, 
       expenseTitle, 
       description || null, 
-      amount, 
+      parseFloat(amount), 
       expenseDate, 
       vendor || null, 
       receipt_number || null, 
@@ -224,12 +234,16 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (
         id, 
         category, 
         title: expenseTitle, 
-        description, 
+        description: description || expenseTitle, 
         amount: parseFloat(amount), 
-        date: expenseDate, 
-        status: 'APPROVED',  // Auto-approve for immediate use in reports
+        date: expenseDate,
+        expense_date: expenseDate,
+        status: 'APPROVED',
+        createdAt: new Date().toISOString(),
         created_by: req.user.id, 
-        created_by_name: createdByName 
+        created_by_name: createdByName,
+        createdBy: createdByName,
+        createdByRole: createdByRole || req.user.role
       }
     });
   } catch (error) {

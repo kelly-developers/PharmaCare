@@ -155,7 +155,7 @@ router.get('/role/:role', authenticate, authorize('ADMIN'), async (req, res, nex
 });
 
 // GET /api/users - Get all users (paginated)
-// FIXED: Business admins should NOT see super admin users
+// FIXED: Business admins should NOT see super admin users, properly filter by business_id
 router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -163,6 +163,8 @@ router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
     const offset = (page - 1) * limit;
     const search = req.query.search || '';
     const role = req.query.role;
+
+    console.log('📋 Fetching users for:', { userId: req.user.id, role: req.user.role, businessId: req.user.business_id });
 
     let queryText = `
       SELECT id, username, email, name, role, phone, active, created_at, last_login, business_id 
@@ -177,15 +179,14 @@ router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
     // CRITICAL: If user is NOT a super admin, exclude super admin users
     // Also filter to only show users from the same business
     if (req.user.role !== 'SUPER_ADMIN') {
-      paramCount++;
       queryText += ` AND role != 'SUPER_ADMIN'`;
       queryCount += ` AND role != 'SUPER_ADMIN'`;
       
-      // Also filter by business_id if user belongs to a business
+      // FIXED: Filter by business_id - show only users from the same business
       if (req.user.business_id) {
         paramCount++;
-        queryText += ` AND (business_id = $${paramCount} OR business_id IS NULL)`;
-        queryCount += ` AND (business_id = $${paramCount} OR business_id IS NULL)`;
+        queryText += ` AND business_id = $${paramCount}`;
+        queryCount += ` AND business_id = $${paramCount}`;
         params.push(req.user.business_id);
       }
     }
@@ -201,17 +202,22 @@ router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
       paramCount++;
       queryText += ` AND role = $${paramCount}`;
       queryCount += ` AND role = $${paramCount}`;
-      params.push(role);
+      params.push(role.toUpperCase());
     }
 
-    queryText += ` ORDER BY created_at DESC LIMIT $${params.length + 1} OFFSET $${params.length + 2}`;
-    params.push(limit, offset);
+    // Add pagination params
+    const paginationParamStart = params.length + 1;
+    queryText += ` ORDER BY created_at DESC LIMIT $${paginationParamStart} OFFSET $${paginationParamStart + 1}`;
+    
+    console.log('📋 Query:', queryText);
+    console.log('📋 Params:', [...params, limit, offset]);
 
-    const [users] = await query(queryText, params);
-    const countParams = params.slice(0, params.length - 2);
-    const [countResult] = await query(queryCount, countParams);
+    const [users] = await query(queryText, [...params, limit, offset]);
+    const [countResult] = await query(queryCount, params);
     
     const total = parseInt(getFirst(countResult).total) || 0;
+
+    console.log('📋 Found users:', users.length, 'Total:', total);
 
     res.json({
       success: true,
@@ -220,12 +226,13 @@ router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
         page,
         limit,
         total,
-        pages: Math.ceil(total / limit),
+        pages: Math.ceil(total / limit) || 1,
         hasNext: page < Math.ceil(total / limit),
         hasPrev: page > 1
       }
     });
   } catch (error) {
+    console.error('❌ Get users error:', error);
     next(error);
   }
 });
