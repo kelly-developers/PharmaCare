@@ -657,58 +657,87 @@ router.get('/medicine-details', authenticate, authorize('ADMIN', 'MANAGER', 'PHA
 });
 
 // GET /api/reports/sales-trend - Get sales trend data for charts
+// FIXED: Calculate profit correctly (sales - cost), not showing cost twice
 router.get('/sales-trend', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { period } = req.query;
-    let dateFormat, dateInterval, dateLimit;
+    let dateInterval, dateLimit;
 
     switch (period) {
       case 'week':
-        dateFormat = 'YYYY-MM-DD';
         dateInterval = "7 days";
         dateLimit = 7;
         break;
       case 'quarter':
-        dateFormat = 'YYYY-MM';
         dateInterval = "3 months";
-        dateLimit = 3;
+        dateLimit = 90;
         break;
       case 'year':
-        dateFormat = 'YYYY-MM';
         dateInterval = "12 months";
-        dateLimit = 12;
+        dateLimit = 365;
         break;
       case 'month':
       default:
-        dateFormat = 'YYYY-MM-DD';
         dateInterval = "30 days";
         dateLimit = 30;
         break;
     }
 
-    // Get daily/monthly sales data
+    // Get daily/monthly sales data with proper profit calculation
+    // FIXED: Exclude credit sales from totals, calculate profit = final_amount - cost
     const [salesData] = await query(`
       SELECT 
-        DATE(created_at) as date,
-        COALESCE(SUM(final_amount), 0) as sales,
-        COALESCE(SUM(total_amount - final_amount + profit), 0) as cost,
-        COALESCE(SUM(profit), 0) as profit,
+        DATE(s.created_at) as date,
+        COALESCE(SUM(CASE WHEN s.payment_method != 'CREDIT' THEN s.final_amount ELSE 0 END), 0) as sales,
+        COALESCE(SUM(
+          CASE WHEN s.payment_method != 'CREDIT' THEN 
+            (SELECT COALESCE(SUM(si.cost_price * si.quantity), 0) FROM sale_items si WHERE si.sale_id = s.id)
+          ELSE 0 END
+        ), 0) as cost,
+        COALESCE(SUM(CASE WHEN s.payment_method != 'CREDIT' THEN s.profit ELSE 0 END), 0) as profit,
         COUNT(*) as transactions
-      FROM sales
-      WHERE created_at >= CURRENT_DATE - INTERVAL '${dateInterval}'
-      GROUP BY DATE(created_at)
+      FROM sales s
+      WHERE s.created_at >= CURRENT_DATE - INTERVAL '${dateInterval}'
+      GROUP BY DATE(s.created_at)
       ORDER BY date ASC
       LIMIT ${dateLimit}
     `);
 
-    const trendData = salesData.map(row => ({
-      date: row.date,
-      sales: parseFloat(row.sales) || 0,
-      revenue: parseFloat(row.sales) || 0,
-      cost: parseFloat(row.cost) || 0,
-      profit: parseFloat(row.profit) || 0,
-      transactions: parseInt(row.transactions) || 0
-    }));
+    // Add any credit payments received for each date
+    const [creditPayments] = await query(`
+      SELECT 
+        DATE(cp.created_at) as date,
+        COALESCE(SUM(cp.amount), 0) as paid_credit
+      FROM credit_payments cp
+      WHERE cp.created_at >= CURRENT_DATE - INTERVAL '${dateInterval}'
+      GROUP BY DATE(cp.created_at)
+    `);
+
+    // Merge credit payments into sales data
+    const creditByDate = {};
+    if (creditPayments) {
+      creditPayments.forEach(cp => {
+        const dateKey = cp.date?.toISOString?.()?.split('T')[0] || cp.date;
+        creditByDate[dateKey] = parseFloat(cp.paid_credit) || 0;
+      });
+    }
+
+    const trendData = salesData.map(row => {
+      const dateKey = row.date?.toISOString?.()?.split('T')[0] || row.date;
+      const paidCredit = creditByDate[dateKey] || 0;
+      const salesAmount = parseFloat(row.sales) || 0;
+      const costAmount = parseFloat(row.cost) || 0;
+      const profitAmount = parseFloat(row.profit) || 0;
+      
+      return {
+        date: row.date,
+        sales: salesAmount + paidCredit, // Include paid credit in sales
+        revenue: salesAmount + paidCredit,
+        cost: costAmount,
+        profit: profitAmount,  // FIXED: Show actual profit, not cost again
+        transactions: parseInt(row.transactions) || 0
+      };
+    });
 
     res.json({ success: true, data: trendData });
   } catch (error) {

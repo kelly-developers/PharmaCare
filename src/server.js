@@ -18,6 +18,7 @@ const purchaseOrderRoutes = require('./routes/purchaseOrders');
 const employeeRoutes = require('./routes/employees');
 const reportRoutes = require('./routes/reports');
 const businessRoutes = require('./routes/businesses');
+const familyPlanningRoutes = require('./routes/familyPlanning');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -79,6 +80,7 @@ app.use('/api/purchase-orders', purchaseOrderRoutes);
 app.use('/api/employees', employeeRoutes);
 app.use('/api/reports', reportRoutes);
 app.use('/api/businesses', businessRoutes);
+app.use('/api/family-planning', familyPlanningRoutes);
 
 // Error handling middleware
 app.use(errorHandler);

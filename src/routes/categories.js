@@ -6,24 +6,42 @@ const { authenticate, authorize } = require('../middleware/auth');
 const router = express.Router();
 
 // GET /api/categories - Get all categories
+// FIXED: Filter by business_id to ensure unique categories per business
 router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
-    const [categories] = await query(`
-      SELECT c.id, c.name, c.description, c.created_at, c.updated_at,
-        (SELECT COUNT(*) FROM medicines m WHERE m.category = c.name) as medicine_count
-      FROM categories c 
-      ORDER BY c.name
-    `);
+    let whereClause = '1=1';
+    const params = [];
 
-    // Transform to camelCase for frontend
-    const transformedCategories = categories.map(c => ({
-      id: c.id,
-      name: c.name,
-      description: c.description,
-      medicineCount: parseInt(c.medicine_count) || 0,
-      createdAt: c.created_at,
-      updatedAt: c.updated_at
-    }));
+    // Filter by business_id - only show categories for the user's business
+    if (req.user.business_id) {
+      whereClause += ` AND (c.business_id = $1 OR c.business_id IS NULL)`;
+      params.push(req.user.business_id);
+    }
+
+    const [categories] = await query(`
+      SELECT DISTINCT ON (c.name) c.id, c.name, c.description, c.business_id, c.created_at, c.updated_at,
+        (SELECT COUNT(*) FROM medicines m WHERE m.category = c.name AND (m.business_id = c.business_id OR c.business_id IS NULL)) as medicine_count
+      FROM categories c 
+      WHERE ${whereClause}
+      ORDER BY c.name, c.created_at DESC
+    `, params);
+
+    // Transform to camelCase for frontend - ensure no duplicates
+    const seenNames = new Set();
+    const transformedCategories = categories
+      .filter(c => {
+        if (seenNames.has(c.name.toLowerCase())) return false;
+        seenNames.add(c.name.toLowerCase());
+        return true;
+      })
+      .map(c => ({
+        id: c.id,
+        name: c.name,
+        description: c.description,
+        medicineCount: parseInt(c.medicine_count) || 0,
+        createdAt: c.created_at,
+        updatedAt: c.updated_at
+      }));
 
     res.json({ success: true, data: transformedCategories });
   } catch (error) {

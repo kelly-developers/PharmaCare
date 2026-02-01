@@ -384,18 +384,42 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, ne
 });
 
 // GET /api/sales/today - Get today's sales summary
+// FIXED: Exclude CREDIT sales from totals until they are paid
 router.get('/today', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
+    // Only count non-credit sales OR credit sales that are fully paid
     const [summaryResult] = await query(`
       SELECT 
         COUNT(*) as transaction_count,
-        COALESCE(SUM(final_amount), 0) as total_sales,
-        COALESCE(SUM(profit), 0) as total_profit
-      FROM sales
-      WHERE DATE(created_at) = CURRENT_DATE
+        COALESCE(SUM(
+          CASE 
+            WHEN s.payment_method = 'CREDIT' THEN 0
+            ELSE s.final_amount 
+          END
+        ), 0) as total_sales,
+        COALESCE(SUM(
+          CASE 
+            WHEN s.payment_method = 'CREDIT' THEN 0
+            ELSE s.profit 
+          END
+        ), 0) as total_profit,
+        COALESCE(SUM(
+          CASE WHEN s.payment_method = 'CREDIT' THEN s.final_amount ELSE 0 END
+        ), 0) as total_credit_sales
+      FROM sales s
+      WHERE DATE(s.created_at) = CURRENT_DATE
+    `);
+
+    // Add paid credit sales from today
+    const [paidCreditResult] = await query(`
+      SELECT COALESCE(SUM(cp.amount), 0) as paid_credit_today
+      FROM credit_payments cp
+      JOIN credit_sales cs ON cp.credit_sale_id = cs.id
+      WHERE DATE(cp.created_at) = CURRENT_DATE
     `);
 
     const summary = getFirst(summaryResult);
+    const paidCredit = parseFloat(getFirst(paidCreditResult).paid_credit_today) || 0;
 
     const [todaySales] = await query(`
       SELECT 
@@ -428,8 +452,10 @@ router.get('/today', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', '
       data: {
         date: new Date().toISOString().split('T')[0],
         transactionCount: parseInt(summary.transaction_count) || 0,
-        totalSales: parseFloat(summary.total_sales) || 0,
+        totalSales: (parseFloat(summary.total_sales) || 0) + paidCredit,
         totalProfit: parseFloat(summary.total_profit) || 0,
+        totalCreditSales: parseFloat(summary.total_credit_sales) || 0,
+        paidCreditToday: paidCredit,
         sales: todaySales || []
       }
     });
@@ -493,39 +519,63 @@ router.get('/cashier/:cashierId/today', authenticate, authorize('ADMIN', 'MANAGE
 });
 
 // GET /api/sales/stats - Get sales statistics
+// FIXED: Exclude CREDIT sales from totals until they are paid
 router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
+    // Today's stats - exclude credit sales from totals
     const [todayResult] = await query(`
       SELECT 
         COUNT(*) as count,
-        COALESCE(SUM(final_amount), 0) as total,
-        COALESCE(SUM(profit), 0) as profit
+        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN final_amount ELSE 0 END), 0) as total,
+        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN profit ELSE 0 END), 0) as profit,
+        COALESCE(SUM(CASE WHEN payment_method = 'CREDIT' THEN final_amount ELSE 0 END), 0) as credit_total
       FROM sales WHERE DATE(created_at) = CURRENT_DATE
     `);
 
+    // Month's stats - exclude credit sales from totals
     const [monthResult] = await query(`
       SELECT 
         COUNT(*) as count,
-        COALESCE(SUM(final_amount), 0) as total,
-        COALESCE(SUM(profit), 0) as profit
+        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN final_amount ELSE 0 END), 0) as total,
+        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN profit ELSE 0 END), 0) as profit,
+        COALESCE(SUM(CASE WHEN payment_method = 'CREDIT' THEN final_amount ELSE 0 END), 0) as credit_total
       FROM sales WHERE DATE(created_at) >= DATE_TRUNC('month', CURRENT_DATE)
+    `);
+
+    // Add paid credit amounts for today and month
+    const [paidCreditToday] = await query(`
+      SELECT COALESCE(SUM(cp.amount), 0) as paid
+      FROM credit_payments cp
+      WHERE DATE(cp.created_at) = CURRENT_DATE
+    `);
+
+    const [paidCreditMonth] = await query(`
+      SELECT COALESCE(SUM(cp.amount), 0) as paid
+      FROM credit_payments cp
+      WHERE DATE(cp.created_at) >= DATE_TRUNC('month', CURRENT_DATE)
     `);
 
     const today = getFirst(todayResult);
     const month = getFirst(monthResult);
+    const paidToday = parseFloat(getFirst(paidCreditToday).paid) || 0;
+    const paidMonth = parseFloat(getFirst(paidCreditMonth).paid) || 0;
 
     res.json({
       success: true,
       data: {
         today: {
           count: parseInt(today.count) || 0,
-          total: parseFloat(today.total) || 0,
-          profit: parseFloat(today.profit) || 0
+          total: (parseFloat(today.total) || 0) + paidToday,
+          profit: parseFloat(today.profit) || 0,
+          creditTotal: parseFloat(today.credit_total) || 0,
+          paidCredit: paidToday
         },
         month: {
           count: parseInt(month.count) || 0,
-          total: parseFloat(month.total) || 0,
-          profit: parseFloat(month.profit) || 0
+          total: (parseFloat(month.total) || 0) + paidMonth,
+          profit: parseFloat(month.profit) || 0,
+          creditTotal: parseFloat(month.credit_total) || 0,
+          paidCredit: paidMonth
         }
       }
     });

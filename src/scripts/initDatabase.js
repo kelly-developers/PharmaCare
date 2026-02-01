@@ -652,6 +652,46 @@ const createV6CreditSales = async (client) => {
   await recordMigration(client, 6, 'Added credit_sales and credit_payments tables');
 };
 
+// V7: Family Planning tables
+const createV7FamilyPlanning = async (client) => {
+  console.log('📋 Creating v7 tables (family planning)...');
+
+  // Family planning table - tracks clients for Depo, Herbal, Femi Plan
+  await client.query(`
+    CREATE TABLE IF NOT EXISTS family_planning (
+      id VARCHAR(36) PRIMARY KEY,
+      business_id VARCHAR(36) REFERENCES businesses(id) ON DELETE CASCADE,
+      client_name VARCHAR(100) NOT NULL,
+      client_phone VARCHAR(50) NOT NULL,
+      method VARCHAR(20) NOT NULL CHECK (method IN ('DEPO', 'HERBAL', 'FEMI_PLAN')),
+      last_administered_date DATE NOT NULL,
+      next_due_date DATE NOT NULL,
+      cycle_days INT DEFAULT 28,
+      notes TEXT,
+      status VARCHAR(20) DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE', 'INACTIVE', 'COMPLETED')),
+      created_by VARCHAR(36),
+      created_by_name VARCHAR(100),
+      updated_by VARCHAR(36),
+      updated_by_name VARCHAR(100),
+      created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  // Add indexes for family planning
+  try {
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_family_planning_business ON family_planning(business_id)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_family_planning_client ON family_planning(client_phone)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_family_planning_method ON family_planning(method)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_family_planning_due_date ON family_planning(next_due_date)`);
+    await client.query(`CREATE INDEX IF NOT EXISTS idx_family_planning_status ON family_planning(status)`);
+  } catch (error) {
+    console.warn('⚠️ Could not create family planning indexes:', error.message);
+  }
+
+  await recordMigration(client, 7, 'Added family_planning table for Depo, Herbal, Femi Plan tracking');
+};
+
 // Migration definitions
 const migrations = [
   { version: 1, description: 'Initial schema', migrate: createV1Tables },
@@ -660,6 +700,7 @@ const migrations = [
   { version: 4, description: 'Indexes and constraints', migrate: createV4Indexes },
   { version: 5, description: 'Audit triggers', migrate: createV5Triggers },
   { version: 6, description: 'Credit sales', migrate: createV6CreditSales },
+  { version: 7, description: 'Family planning', migrate: createV7FamilyPlanning },
 ];
 
 const initializeDatabase = async () => {

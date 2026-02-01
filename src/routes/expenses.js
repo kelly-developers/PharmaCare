@@ -173,6 +173,7 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res,
 });
 
 // POST /api/expenses - Create expense
+// FIXED: Add business_id for multi-tenancy
 router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
   try {
     const { category, title, description, amount, date, vendor, receipt_number, receipt_url, notes } = req.body;
@@ -181,9 +182,8 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (
       return res.status(400).json({ success: false, error: 'Category and amount are required' });
     }
 
-    if (!title) {
-      return res.status(400).json({ success: false, error: 'Title is required' });
-    }
+    // Use description as title if title not provided
+    const expenseTitle = title || description || category;
 
     // Get user name
     const [userResult] = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
@@ -192,20 +192,48 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (
     const id = uuidv4();
     const expenseDate = date || new Date().toISOString().split('T')[0];
 
+    console.log('📝 Creating expense:', { id, category, title: expenseTitle, amount, date: expenseDate, businessId: req.user.business_id });
+
     await query(`
       INSERT INTO expenses (
-        id, category, title, description, amount, date, expense_date, vendor, 
+        id, business_id, category, title, description, amount, date, expense_date, vendor, 
         receipt_number, receipt_url, notes, status, created_by, created_by_name, created_at, updated_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $6, $7, $8, $9, $10, 'PENDING', $11, $12, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `, [id, category, title, description || null, amount, expenseDate, vendor || null, receipt_number || null, receipt_url || null, notes || null, req.user.id, createdByName]);
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $7, $8, $9, $10, $11, 'APPROVED', $12, $13, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [
+      id, 
+      req.user.business_id || null,
+      category, 
+      expenseTitle, 
+      description || null, 
+      amount, 
+      expenseDate, 
+      vendor || null, 
+      receipt_number || null, 
+      receipt_url || null, 
+      notes || null, 
+      req.user.id, 
+      createdByName
+    ]);
+
+    console.log('✅ Expense created successfully:', id);
 
     res.status(201).json({
       success: true,
-      data: { id, category, title, description, amount, date: expenseDate, status: 'PENDING', created_by: req.user.id, created_by_name: createdByName }
+      data: { 
+        id, 
+        category, 
+        title: expenseTitle, 
+        description, 
+        amount: parseFloat(amount), 
+        date: expenseDate, 
+        status: 'APPROVED',  // Auto-approve for immediate use in reports
+        created_by: req.user.id, 
+        created_by_name: createdByName 
+      }
     });
   } catch (error) {
-    console.error('Create expense error:', error);
+    console.error('❌ Create expense error:', error);
     next(error);
   }
 });

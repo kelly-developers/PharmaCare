@@ -155,6 +155,7 @@ router.get('/role/:role', authenticate, authorize('ADMIN'), async (req, res, nex
 });
 
 // GET /api/users - Get all users (paginated)
+// FIXED: Business admins should NOT see super admin users
 router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -164,7 +165,7 @@ router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
     const role = req.query.role;
 
     let queryText = `
-      SELECT id, username, email, name, role, phone, active, created_at, last_login 
+      SELECT id, username, email, name, role, phone, active, created_at, last_login, business_id 
       FROM users 
       WHERE 1=1
     `;
@@ -172,6 +173,22 @@ router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
     let queryCount = 'SELECT COUNT(*) as total FROM users WHERE 1=1';
     let params = [];
     let paramCount = 0;
+
+    // CRITICAL: If user is NOT a super admin, exclude super admin users
+    // Also filter to only show users from the same business
+    if (req.user.role !== 'SUPER_ADMIN') {
+      paramCount++;
+      queryText += ` AND role != 'SUPER_ADMIN'`;
+      queryCount += ` AND role != 'SUPER_ADMIN'`;
+      
+      // Also filter by business_id if user belongs to a business
+      if (req.user.business_id) {
+        paramCount++;
+        queryText += ` AND (business_id = $${paramCount} OR business_id IS NULL)`;
+        queryCount += ` AND (business_id = $${paramCount} OR business_id IS NULL)`;
+        params.push(req.user.business_id);
+      }
+    }
 
     if (search) {
       paramCount++;
@@ -191,7 +208,8 @@ router.get('/', authenticate, authorize('ADMIN'), async (req, res, next) => {
     params.push(limit, offset);
 
     const [users] = await query(queryText, params);
-    const [countResult] = await query(queryCount, params.slice(0, search || role ? params.length - 2 : 0));
+    const countParams = params.slice(0, params.length - 2);
+    const [countResult] = await query(queryCount, countParams);
     
     const total = parseInt(getFirst(countResult).total) || 0;
 
