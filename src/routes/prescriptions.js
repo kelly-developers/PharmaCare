@@ -1,22 +1,30 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../config/database');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, requireBusinessContext } = require('../middleware/auth');
 
 const router = express.Router();
 
 // Helper to safely get first result
 const getFirst = (results) => results[0] || {};
 
-// GET /api/prescriptions/pending - Get pending prescriptions (must be before /:id)
-router.get('/pending', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+// GET /api/prescriptions/pending - Get pending prescriptions
+router.get('/pending', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
+    let whereClause = "p.status = 'PENDING'";
+    const params = [];
+    
+    if (req.businessId) {
+      whereClause += ' AND p.business_id = $1';
+      params.push(req.businessId);
+    }
+
     const [prescriptions] = await query(`
       SELECT p.*
       FROM prescriptions p
-      WHERE p.status = 'PENDING'
+      WHERE ${whereClause}
       ORDER BY p.created_at DESC
-    `);
+    `, params);
 
     for (let prescription of prescriptions) {
       const [items] = await query(`
@@ -34,14 +42,22 @@ router.get('/pending', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST',
 });
 
 // GET /api/prescriptions/dispensed - Get dispensed prescriptions
-router.get('/dispensed', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+router.get('/dispensed', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
+    let whereClause = "p.status = 'DISPENSED'";
+    const params = [];
+    
+    if (req.businessId) {
+      whereClause += ' AND p.business_id = $1';
+      params.push(req.businessId);
+    }
+
     const [prescriptions] = await query(`
       SELECT p.*
       FROM prescriptions p
-      WHERE p.status = 'DISPENSED'
+      WHERE ${whereClause}
       ORDER BY p.dispensed_at DESC
-    `);
+    `, params);
 
     res.json({ success: true, data: prescriptions });
   } catch (error) {
@@ -50,14 +66,22 @@ router.get('/dispensed', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST
 });
 
 // GET /api/prescriptions/patient/:phone - Get prescriptions by patient phone
-router.get('/patient/:phone', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+router.get('/patient/:phone', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
+    let whereClause = 'p.patient_phone = $1';
+    const params = [req.params.phone];
+    
+    if (req.businessId) {
+      whereClause += ' AND p.business_id = $2';
+      params.push(req.businessId);
+    }
+
     const [prescriptions] = await query(`
       SELECT p.*
       FROM prescriptions p
-      WHERE p.patient_phone = $1
+      WHERE ${whereClause}
       ORDER BY p.created_at DESC
-    `, [req.params.phone]);
+    `, params);
 
     for (let prescription of prescriptions) {
       const [items] = await query(`
@@ -75,14 +99,22 @@ router.get('/patient/:phone', authenticate, authorize('ADMIN', 'MANAGER', 'PHARM
 });
 
 // GET /api/prescriptions/creator/:userId - Get prescriptions by creator
-router.get('/creator/:userId', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
+router.get('/creator/:userId', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
+    let whereClause = 'p.created_by = $1';
+    const params = [req.params.userId];
+    
+    if (req.businessId) {
+      whereClause += ' AND p.business_id = $2';
+      params.push(req.businessId);
+    }
+
     const [prescriptions] = await query(`
       SELECT p.*
       FROM prescriptions p
-      WHERE p.created_by = $1
+      WHERE ${whereClause}
       ORDER BY p.created_at DESC
-    `, [req.params.userId]);
+    `, params);
 
     res.json({ success: true, data: prescriptions });
   } catch (error) {
@@ -91,11 +123,19 @@ router.get('/creator/:userId', authenticate, authorize('ADMIN', 'MANAGER', 'PHAR
 });
 
 // GET /api/prescriptions/stats - Get prescription statistics
-router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/stats', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [totalResult] = await query('SELECT COUNT(*) as total FROM prescriptions');
-    const [pendingResult] = await query("SELECT COUNT(*) as pending FROM prescriptions WHERE status = 'PENDING'");
-    const [dispensedResult] = await query("SELECT COUNT(*) as dispensed FROM prescriptions WHERE status = 'DISPENSED'");
+    let whereClause = '1=1';
+    const params = [];
+    
+    if (req.businessId) {
+      whereClause = 'business_id = $1';
+      params.push(req.businessId);
+    }
+
+    const [totalResult] = await query(`SELECT COUNT(*) as total FROM prescriptions WHERE ${whereClause}`, params);
+    const [pendingResult] = await query(`SELECT COUNT(*) as pending FROM prescriptions WHERE ${whereClause} AND status = 'PENDING'`, params);
+    const [dispensedResult] = await query(`SELECT COUNT(*) as dispensed FROM prescriptions WHERE ${whereClause} AND status = 'DISPENSED'`, params);
 
     res.json({
       success: true,
@@ -111,18 +151,29 @@ router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
 });
 
 // GET /api/prescriptions - Get all prescriptions (paginated)
-router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+router.get('/', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 0;
     const size = parseInt(req.query.size) || 20;
     const offset = page * size;
 
+    let whereClause = '1=1';
+    const params = [];
+    let paramIndex = 0;
+    
+    if (req.businessId) {
+      paramIndex++;
+      whereClause = `p.business_id = $${paramIndex}`;
+      params.push(req.businessId);
+    }
+
     const [prescriptions] = await query(`
       SELECT p.*
       FROM prescriptions p
+      WHERE ${whereClause}
       ORDER BY p.created_at DESC
-      LIMIT $1 OFFSET $2
-    `, [size, offset]);
+      LIMIT $${paramIndex + 1} OFFSET $${paramIndex + 2}
+    `, [...params, size, offset]);
 
     // Get prescription items
     for (let prescription of prescriptions) {
@@ -134,7 +185,7 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
       prescription.items = items;
     }
 
-    const [countResult] = await query('SELECT COUNT(*) as total FROM prescriptions');
+    const [countResult] = await query(`SELECT COUNT(*) as total FROM prescriptions WHERE ${whereClause}`, params);
     const total = parseInt(getFirst(countResult).total) || 0;
 
     res.json({
@@ -153,13 +204,21 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
 });
 
 // GET /api/prescriptions/:id - Get prescription by ID
-router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+router.get('/:id', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
+    let whereClause = 'p.id = $1';
+    const params = [req.params.id];
+    
+    if (req.businessId) {
+      whereClause += ' AND p.business_id = $2';
+      params.push(req.businessId);
+    }
+
     const [prescriptions] = await query(`
       SELECT p.*
       FROM prescriptions p
-      WHERE p.id = $1
-    `, [req.params.id]);
+      WHERE ${whereClause}
+    `, params);
 
     if (prescriptions.length === 0) {
       return res.status(404).json({ success: false, error: 'Prescription not found' });
@@ -180,7 +239,8 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CA
 });
 
 // POST /api/prescriptions - Create prescription
-router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
+// FIXED: Include business_id
+router.post('/', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
     const { patient_name, patient_phone, doctor_name, diagnosis, items, notes } = req.body;
 
@@ -190,16 +250,17 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
 
     const id = uuidv4();
 
+    // FIXED: Include business_id
     await query(`
-      INSERT INTO prescriptions (id, patient_name, patient_phone, doctor_name, diagnosis, notes, status, created_by, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, 'PENDING', $7, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-    `, [id, patient_name, patient_phone || null, doctor_name || null, diagnosis || null, notes || null, req.user.id]);
+      INSERT INTO prescriptions (id, business_id, patient_name, patient_phone, doctor_name, diagnosis, notes, status, created_by, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'PENDING', $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [id, req.businessId || null, patient_name, patient_phone || null, doctor_name || null, diagnosis || null, notes || null, req.user.id]);
 
     // Create prescription items
     for (const item of items) {
       const itemId = uuidv4();
       await query(`
-        INSERT INTO prescription_items (id, prescription_id, medicine_id, medicine, quantity, dosage, frequency, duration, instructions)
+        INSERT INTO prescription_items (id, prescription_id, medicine_id, medicine_name, quantity, dosage, frequency, duration, instructions)
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
       `, [itemId, id, item.medicine_id, item.medicine || item.medicine_name || '', item.quantity, item.dosage || null, item.frequency || null, item.duration || null, item.instructions || null]);
     }
@@ -215,9 +276,23 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
 });
 
 // PUT /api/prescriptions/:id - Update prescription
-router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
+router.put('/:id', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
     const { patient_name, patient_phone, doctor_name, diagnosis, items, notes } = req.body;
+
+    // Verify business ownership
+    let checkQuery = 'SELECT id FROM prescriptions WHERE id = $1';
+    const checkParams = [req.params.id];
+    
+    if (req.businessId) {
+      checkQuery += ' AND business_id = $2';
+      checkParams.push(req.businessId);
+    }
+
+    const [existing] = await query(checkQuery, checkParams);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, error: 'Prescription not found' });
+    }
 
     await query(`
       UPDATE prescriptions SET
@@ -232,7 +307,7 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
       for (const item of items) {
         const itemId = uuidv4();
         await query(`
-          INSERT INTO prescription_items (id, prescription_id, medicine_id, medicine, quantity, dosage, frequency, duration, instructions)
+          INSERT INTO prescription_items (id, prescription_id, medicine_id, medicine_name, quantity, dosage, frequency, duration, instructions)
           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
         `, [itemId, req.params.id, item.medicine_id, item.medicine || item.medicine_name || '', item.quantity, item.dosage || null, item.frequency || null, item.duration || null, item.instructions || null]);
       }
@@ -247,8 +322,22 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
 });
 
 // DELETE /api/prescriptions/:id - Delete prescription
-router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
+router.delete('/:id', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
+    // Verify business ownership
+    let checkQuery = 'SELECT id FROM prescriptions WHERE id = $1';
+    const checkParams = [req.params.id];
+    
+    if (req.businessId) {
+      checkQuery += ' AND business_id = $2';
+      checkParams.push(req.businessId);
+    }
+
+    const [existing] = await query(checkQuery, checkParams);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, error: 'Prescription not found' });
+    }
+
     await query('DELETE FROM prescription_items WHERE prescription_id = $1', [req.params.id]);
     await query('DELETE FROM prescriptions WHERE id = $1', [req.params.id]);
     res.json({ success: true, message: 'Prescription deleted successfully' });
@@ -258,9 +347,23 @@ router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'),
 });
 
 // PATCH /api/prescriptions/:id/status - Update prescription status
-router.patch('/:id/status', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+router.patch('/:id/status', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
     const { status } = req.body;
+
+    // Verify business ownership
+    let checkQuery = 'SELECT id FROM prescriptions WHERE id = $1';
+    const checkParams = [req.params.id];
+    
+    if (req.businessId) {
+      checkQuery += ' AND business_id = $2';
+      checkParams.push(req.businessId);
+    }
+
+    const [existing] = await query(checkQuery, checkParams);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, error: 'Prescription not found' });
+    }
 
     let queryText = 'UPDATE prescriptions SET status = $1, updated_at = CURRENT_TIMESTAMP';
     const params = [status];

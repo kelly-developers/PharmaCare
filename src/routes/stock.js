@@ -1,7 +1,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../config/database');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, requireBusinessContext } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -13,7 +13,6 @@ const validateAndFixDate = (dateStr) => {
   if (!dateStr || typeof dateStr !== 'string') return null;
   
   try {
-    // Remove timezone part if present
     const dateOnly = dateStr.split('T')[0];
     const parts = dateOnly.split('-');
     
@@ -23,27 +22,20 @@ const validateAndFixDate = (dateStr) => {
     const month = parseInt(parts[1]);
     const day = parseInt(parts[2]);
     
-    // Validate year
     if (year < 1900 || year > 2100) {
-      // If year is invalid, use current year
       const currentYear = new Date().getFullYear();
       return `${currentYear}-${month.toString().padStart(2, '0')}-${Math.min(day, 28).toString().padStart(2, '0')}`;
     }
     
-    // Validate month
     if (month < 1 || month > 12) {
-      // If month is invalid, use current month
       const currentMonth = new Date().getMonth() + 1;
       const currentYear = new Date().getFullYear();
-      // Get last day of current month
       const lastDay = new Date(currentYear, currentMonth, 0).getDate();
       return `${currentYear}-${currentMonth.toString().padStart(2, '0')}-${Math.min(day, lastDay).toString().padStart(2, '0')}`;
     }
     
-    // Get last day of the month
     const lastDayOfMonth = new Date(year, month, 0).getDate();
     
-    // Fix day if invalid
     let fixedDay = day;
     if (day < 1) {
       fixedDay = 1;
@@ -55,18 +47,15 @@ const validateAndFixDate = (dateStr) => {
     
   } catch (error) {
     console.warn(`⚠️ Date validation failed for "${dateStr}":`, error.message);
-    // Return a safe default date (today)
     const today = new Date();
     return `${today.getFullYear()}-${(today.getMonth() + 1).toString().padStart(2, '0')}-${today.getDate().toString().padStart(2, '0')}`;
   }
 };
 
-// Helper to get safe date range
 const getSafeDateRange = (startDate, endDate) => {
   const safeStartDate = validateAndFixDate(startDate);
   const safeEndDate = validateAndFixDate(endDate);
   
-  // Ensure end date is not before start date
   if (safeStartDate && safeEndDate && safeEndDate < safeStartDate) {
     return { startDate: safeEndDate, endDate: safeStartDate };
   }
@@ -74,12 +63,10 @@ const getSafeDateRange = (startDate, endDate) => {
   return { startDate: safeStartDate, endDate: safeEndDate };
 };
 
-// Helper to get last day of month
 const getLastDayOfMonth = (year, month) => {
   return new Date(year, month, 0).getDate();
 };
 
-// Helper to create safe date string for queries
 const createSafeDateQuery = (year, month, day = null) => {
   const safeYear = year || new Date().getFullYear();
   const safeMonth = Math.max(1, Math.min(12, month || new Date().getMonth() + 1));
@@ -103,16 +90,25 @@ router.get('/health', async (req, res) => {
 });
 
 // GET /api/stock/recent - Get recent stock movements
-router.get('/recent', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/recent', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const limit = parseInt(req.query.limit) || 10;
+
+    let whereClause = '1=1';
+    const params = [];
+    
+    if (req.businessId) {
+      whereClause = 'sm.business_id = $1';
+      params.push(req.businessId);
+    }
 
     const [movements] = await query(`
       SELECT sm.*
       FROM stock_movements sm
+      WHERE ${whereClause}
       ORDER BY sm.created_at DESC
-      LIMIT $1
-    `, [limit]);
+      LIMIT $${params.length + 1}
+    `, [...params, limit]);
 
     res.json({ success: true, data: movements });
   } catch (error) {
@@ -121,11 +117,10 @@ router.get('/recent', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
 });
 
 // GET /api/stock/monthly - Get monthly stock summary
-router.get('/monthly', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/monthly', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { year, month } = req.query;
     
-    // Use safe date creation
     const { startDate, endDate } = createSafeDateQuery(
       parseInt(year),
       parseInt(month)
@@ -133,19 +128,27 @@ router.get('/monthly', authenticate, authorize('ADMIN', 'MANAGER'), async (req, 
 
     console.log(`📊 Monthly stock query for: ${startDate} to ${endDate}`);
 
+    let additionsWhereClause = "type IN ('ADDITION', 'PURCHASE') AND DATE(created_at) BETWEEN $1 AND $2";
+    let salesWhereClause = "type = 'SALE' AND DATE(created_at) BETWEEN $1 AND $2";
+    const params = [startDate, endDate];
+    
+    if (req.businessId) {
+      additionsWhereClause += ' AND business_id = $3';
+      salesWhereClause += ' AND business_id = $3';
+      params.push(req.businessId);
+    }
+
     const [additionsResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
-      WHERE type IN ('ADDITION', 'PURCHASE')
-      AND DATE(created_at) BETWEEN $1 AND $2
-    `, [startDate, endDate]);
+      WHERE ${additionsWhereClause}
+    `, params);
 
     const [salesResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
-      WHERE type = 'SALE'
-      AND DATE(created_at) BETWEEN $1 AND $2
-    `, [startDate, endDate]);
+      WHERE ${salesWhereClause}
+    `, params);
 
     res.json({
       success: true,
@@ -164,41 +167,50 @@ router.get('/monthly', authenticate, authorize('ADMIN', 'MANAGER'), async (req, 
 });
 
 // GET /api/stock/summary - Get stock summary for period
-router.get('/summary', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/summary', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
 
-    // Validate and fix dates
     const { startDate: safeStartDate, endDate: safeEndDate } = getSafeDateRange(startDate, endDate);
     
     console.log(`📊 Stock summary query: ${safeStartDate || 'No start date'} to ${safeEndDate || 'No end date'}`);
 
     let dateFilter = '';
     const params = [];
+    let paramIndex = 0;
+    
+    // CRITICAL: Filter by business_id
+    if (req.businessId) {
+      paramIndex++;
+      params.push(req.businessId);
+    }
 
     if (safeStartDate && safeEndDate) {
-      dateFilter = 'AND DATE(created_at) BETWEEN $1 AND $2';
+      paramIndex++;
+      dateFilter = `AND DATE(created_at) BETWEEN $${paramIndex} AND $${paramIndex + 1}`;
       params.push(safeStartDate, safeEndDate);
     }
+
+    const businessFilter = req.businessId ? 'business_id = $1' : '1=1';
 
     const [additionsResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
-      WHERE type IN ('ADDITION', 'PURCHASE')
+      WHERE ${businessFilter} AND type IN ('ADDITION', 'PURCHASE')
       ${dateFilter}
     `, params);
 
     const [salesResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
-      WHERE type = 'SALE'
+      WHERE ${businessFilter} AND type = 'SALE'
       ${dateFilter}
     `, params);
 
     const [lossesResult] = await query(`
       SELECT COALESCE(SUM(quantity), 0) as total
       FROM stock_movements
-      WHERE type = 'LOSS'
+      WHERE ${businessFilter} AND type = 'LOSS'
       ${dateFilter}
     `, params);
 
@@ -226,8 +238,16 @@ router.get('/summary', authenticate, authorize('ADMIN', 'MANAGER'), async (req, 
 });
 
 // GET /api/stock/breakdown - Get stock breakdown by category
-router.get('/breakdown', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/breakdown', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
+    let whereClause = "category IS NOT NULL AND category != ''";
+    const params = [];
+    
+    if (req.businessId) {
+      whereClause += ' AND business_id = $1';
+      params.push(req.businessId);
+    }
+
     const [breakdown] = await query(`
       SELECT 
         category,
@@ -235,10 +255,10 @@ router.get('/breakdown', authenticate, authorize('ADMIN', 'MANAGER'), async (req
         COALESCE(SUM(stock_quantity), 0) as total_stock,
         COALESCE(SUM(stock_quantity * cost_price), 0) as total_value
       FROM medicines
-      WHERE category IS NOT NULL AND category != ''
+      WHERE ${whereClause}
       GROUP BY category
       ORDER BY total_value DESC
-    `);
+    `, params);
 
     res.json({ success: true, data: breakdown });
   } catch (error) {
@@ -246,14 +266,22 @@ router.get('/breakdown', authenticate, authorize('ADMIN', 'MANAGER'), async (req
   }
 });
 
-// GET /api/stock/movements - Get all stock movements (NO pagination - returns ALL movements)
-router.get('/movements', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+// GET /api/stock/movements - Get all stock movements
+// FIXED: Filter by business_id
+router.get('/movements', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { type, medicineId, startDate, endDate } = req.query;
     
     let whereClause = '1=1';
     const params = [];
     let paramIndex = 0;
+    
+    // CRITICAL: Filter by business_id
+    if (req.businessId) {
+      paramIndex++;
+      whereClause += ` AND sm.business_id = $${paramIndex}`;
+      params.push(req.businessId);
+    }
     
     if (type) {
       paramIndex++;
@@ -268,7 +296,6 @@ router.get('/movements', authenticate, authorize('ADMIN', 'MANAGER'), async (req
     }
     
     if (startDate && endDate) {
-      // Validate and fix dates
       const { startDate: safeStartDate, endDate: safeEndDate } = getSafeDateRange(startDate, endDate);
       
       paramIndex++;
@@ -307,14 +334,22 @@ router.get('/movements', authenticate, authorize('ADMIN', 'MANAGER'), async (req
 });
 
 // GET /api/stock/movements/reference/:referenceId - Get movements by reference
-router.get('/movements/reference/:referenceId', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/movements/reference/:referenceId', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
+    let whereClause = 'sm.reference_id = $1';
+    const params = [req.params.referenceId];
+    
+    if (req.businessId) {
+      whereClause += ' AND sm.business_id = $2';
+      params.push(req.businessId);
+    }
+
     const [movements] = await query(`
       SELECT sm.*
       FROM stock_movements sm
-      WHERE sm.reference_id = $1
+      WHERE ${whereClause}
       ORDER BY sm.created_at DESC
-    `, [req.params.referenceId]);
+    `, params);
 
     res.json({ success: true, data: movements });
   } catch (error) {
@@ -323,7 +358,7 @@ router.get('/movements/reference/:referenceId', authenticate, authorize('ADMIN',
 });
 
 // GET /api/stock/movements/medicine/:medicineId/filtered - Get filtered movements
-router.get('/movements/medicine/:medicineId/filtered', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/movements/medicine/:medicineId/filtered', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { type, startDate, endDate } = req.query;
     const page = parseInt(req.query.page) || 0;
@@ -334,6 +369,12 @@ router.get('/movements/medicine/:medicineId/filtered', authenticate, authorize('
     const params = [req.params.medicineId];
     let paramIndex = 1;
 
+    if (req.businessId) {
+      paramIndex++;
+      whereClause += ` AND sm.business_id = $${paramIndex}`;
+      params.push(req.businessId);
+    }
+
     if (type) {
       paramIndex++;
       whereClause += ` AND sm.type = $${paramIndex}`;
@@ -341,7 +382,6 @@ router.get('/movements/medicine/:medicineId/filtered', authenticate, authorize('
     }
     
     if (startDate && endDate) {
-      // Validate and fix dates
       const { startDate: safeStartDate, endDate: safeEndDate } = getSafeDateRange(startDate, endDate);
       
       paramIndex++;
@@ -395,23 +435,31 @@ router.get('/movements/medicine/:medicineId/filtered', authenticate, authorize('
 });
 
 // GET /api/stock/movements/medicine/:medicineId - Get movements by medicine
-router.get('/movements/medicine/:medicineId', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/movements/medicine/:medicineId', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const page = parseInt(req.query.page) || 0;
     const size = parseInt(req.query.size) || 20;
     const offset = page * size;
 
+    let whereClause = 'sm.medicine_id = $1';
+    const params = [req.params.medicineId];
+    
+    if (req.businessId) {
+      whereClause += ' AND sm.business_id = $2';
+      params.push(req.businessId);
+    }
+
     const [movements] = await query(`
       SELECT sm.*
       FROM stock_movements sm
-      WHERE sm.medicine_id = $1
+      WHERE ${whereClause}
       ORDER BY sm.created_at DESC
-      LIMIT $2 OFFSET $3
-    `, [req.params.medicineId, size, offset]);
+      LIMIT $${params.length + 1} OFFSET $${params.length + 2}
+    `, [...params, size, offset]);
 
     const [countResult] = await query(
-      'SELECT COUNT(*) as total FROM stock_movements WHERE medicine_id = $1',
-      [req.params.medicineId]
+      `SELECT COUNT(*) as total FROM stock_movements sm WHERE ${whereClause}`,
+      params
     );
     const total = parseInt(getFirst(countResult).total) || 0;
 
@@ -431,20 +479,27 @@ router.get('/movements/medicine/:medicineId', authenticate, authorize('ADMIN', '
 });
 
 // GET /api/stock/net-movement/:medicineId - Get net movement for medicine
-router.get('/net-movement/:medicineId', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/net-movement/:medicineId', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
 
     let dateFilter = '';
     const params = [req.params.medicineId];
+    let paramIndex = 1;
+
+    if (req.businessId) {
+      paramIndex++;
+      params.push(req.businessId);
+    }
 
     if (startDate && endDate) {
-      // Validate and fix dates
       const { startDate: safeStartDate, endDate: safeEndDate } = getSafeDateRange(startDate, endDate);
       
-      dateFilter = 'AND DATE(created_at) BETWEEN $2 AND $3';
+      dateFilter = `AND DATE(created_at) BETWEEN $${paramIndex + 1} AND $${paramIndex + 2}`;
       params.push(safeStartDate, safeEndDate);
     }
+
+    const businessFilter = req.businessId ? `AND business_id = $2` : '';
 
     console.log(`📊 Net movement query for medicine ${req.params.medicineId} with params:`, params);
 
@@ -455,6 +510,7 @@ router.get('/net-movement/:medicineId', authenticate, authorize('ADMIN', 'MANAGE
         COALESCE(SUM(CASE WHEN type = 'LOSS' THEN quantity ELSE 0 END), 0) as losses
       FROM stock_movements
       WHERE medicine_id = $1
+      ${businessFilter}
       ${dateFilter}
     `, params);
 
@@ -479,7 +535,8 @@ router.get('/net-movement/:medicineId', authenticate, authorize('ADMIN', 'MANAGE
 });
 
 // POST /api/stock/loss - Record stock loss
-router.post('/loss', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+// FIXED: Include business_id
+router.post('/loss', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { medicine_id, quantity, reason, notes } = req.body;
 
@@ -487,8 +544,16 @@ router.post('/loss', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
       return res.status(400).json({ success: false, error: 'Medicine ID and valid quantity are required' });
     }
 
-    // Check available stock
-    const [medicines] = await query('SELECT * FROM medicines WHERE id = $1', [medicine_id]);
+    // Check available stock - verify business ownership
+    let medicineQuery = 'SELECT * FROM medicines WHERE id = $1';
+    const medicineParams = [medicine_id];
+    
+    if (req.businessId) {
+      medicineQuery += ' AND business_id = $2';
+      medicineParams.push(req.businessId);
+    }
+
+    const [medicines] = await query(medicineQuery, medicineParams);
     
     if (medicines.length === 0) {
       return res.status(404).json({ success: false, error: 'Medicine not found' });
@@ -503,66 +568,69 @@ router.post('/loss', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
     const previousStock = medicine.stock_quantity;
     const newStock = previousStock - quantity;
 
-    // Get user name
-    const [userResult] = await query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
-    const user = getFirst(userResult);
-
     // Update medicine stock
     await query(
       'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
       [newStock, medicine_id]
     );
 
-    // Record stock movement
-    const id = uuidv4();
+    // Get user name
+    const [userResult] = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    const performedByName = getFirst(userResult).name || 'Unknown';
+
+    // Record stock movement with business_id
+    const movementId = uuidv4();
     await query(`
       INSERT INTO stock_movements (
-        id, medicine_id, medicine_name, type, quantity, reason, notes, 
-        created_by, performed_by_name, performed_by_role, previous_stock, new_stock, created_at
+        id, business_id, medicine_id, medicine_name, type, quantity, reason, notes,
+        created_by, performed_by_name, performed_by_role,
+        previous_stock, new_stock, created_at
       )
-      VALUES ($1, $2, $3, 'LOSS', $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, 'LOSS', $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
     `, [
-      id, medicine_id, medicine.name, quantity, reason || 'Stock loss', notes || null,
-      req.user.id, user.name || 'Unknown', user.role || 'UNKNOWN', previousStock, newStock
+      movementId, req.businessId || null, medicine_id, medicine.name, quantity, reason || null, notes || null,
+      req.user.id, performedByName, req.user.role, previousStock, newStock
     ]);
 
-    res.json({
+    res.status(201).json({
       success: true,
-      data: { 
-        id, 
-        medicine_id, 
+      data: {
+        id: movementId,
+        medicine_id,
         medicine_name: medicine.name,
-        type: 'LOSS', 
-        quantity, 
-        reason: reason || 'Stock loss', 
-        notes, 
-        previous_stock: previousStock, 
-        new_stock: newStock 
-      }
+        type: 'LOSS',
+        quantity,
+        previous_stock: previousStock,
+        new_stock: newStock,
+        reason,
+        notes
+      },
+      message: 'Stock loss recorded successfully'
     });
   } catch (error) {
-    console.error('❌ Stock loss error:', error);
     next(error);
   }
 });
 
 // POST /api/stock/adjustment - Record stock adjustment
-router.post('/adjustment', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.post('/adjustment', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const { medicine_id, quantity, reason, notes } = req.body;
+    const { medicine_id, new_quantity, reason, notes } = req.body;
 
-    if (!medicine_id || quantity === undefined) {
-      return res.status(400).json({ success: false, error: 'Medicine ID and quantity are required' });
+    if (!medicine_id || new_quantity === undefined || new_quantity < 0) {
+      return res.status(400).json({ success: false, error: 'Medicine ID and valid new quantity are required' });
     }
 
-    // Validate quantity
-    const adjustedQuantity = parseInt(quantity);
-    if (isNaN(adjustedQuantity) || adjustedQuantity < 0) {
-      return res.status(400).json({ success: false, error: 'Valid positive quantity is required' });
+    // Check medicine exists - verify business ownership
+    let medicineQuery = 'SELECT * FROM medicines WHERE id = $1';
+    const medicineParams = [medicine_id];
+    
+    if (req.businessId) {
+      medicineQuery += ' AND business_id = $2';
+      medicineParams.push(req.businessId);
     }
 
-    // Get current stock
-    const [medicines] = await query('SELECT * FROM medicines WHERE id = $1', [medicine_id]);
+    const [medicines] = await query(medicineQuery, medicineParams);
     
     if (medicines.length === 0) {
       return res.status(404).json({ success: false, error: 'Medicine not found' });
@@ -570,121 +638,120 @@ router.post('/adjustment', authenticate, authorize('ADMIN', 'MANAGER'), async (r
 
     const medicine = medicines[0];
     const previousStock = medicine.stock_quantity;
-    const adjustment = adjustedQuantity - previousStock;
-
-    // Get user name
-    const [userResult] = await query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
-    const user = getFirst(userResult);
+    const quantityChange = new_quantity - previousStock;
 
     // Update medicine stock
     await query(
       'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [adjustedQuantity, medicine_id]
+      [new_quantity, medicine_id]
     );
 
-    // Record stock movement
-    const id = uuidv4();
+    // Get user name
+    const [userResult] = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    const performedByName = getFirst(userResult).name || 'Unknown';
+
+    // Record stock movement with business_id
+    const movementId = uuidv4();
     await query(`
       INSERT INTO stock_movements (
-        id, medicine_id, medicine_name, type, quantity, reason, notes, 
-        created_by, performed_by_name, performed_by_role, previous_stock, new_stock, created_at
+        id, business_id, medicine_id, medicine_name, type, quantity, reason, notes,
+        created_by, performed_by_name, performed_by_role,
+        previous_stock, new_stock, created_at
       )
-      VALUES ($1, $2, $3, 'ADJUSTMENT', $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, 'ADJUSTMENT', $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
     `, [
-      id, medicine_id, medicine.name, adjustment, reason || 'Stock adjustment', notes || null,
-      req.user.id, user.name || 'Unknown', user.role || 'UNKNOWN', previousStock, adjustedQuantity
+      movementId, req.businessId || null, medicine_id, medicine.name, Math.abs(quantityChange), reason || null, notes || null,
+      req.user.id, performedByName, req.user.role, previousStock, new_quantity
     ]);
 
-    res.json({
+    res.status(201).json({
       success: true,
-      data: { 
-        id, 
-        medicine_id, 
+      data: {
+        id: movementId,
+        medicine_id,
         medicine_name: medicine.name,
-        type: 'ADJUSTMENT', 
-        previousQuantity: previousStock, 
-        newQuantity: adjustedQuantity, 
-        adjustment 
-      }
+        type: 'ADJUSTMENT',
+        quantity_change: quantityChange,
+        previous_stock: previousStock,
+        new_stock: new_quantity,
+        reason,
+        notes
+      },
+      message: 'Stock adjustment recorded successfully'
     });
   } catch (error) {
-    console.error('❌ Stock adjustment error:', error);
     next(error);
   }
 });
 
-// DELETE /api/stock/movements/:id - Delete stock movement
-router.delete('/movements/:id', authenticate, authorize('ADMIN'), async (req, res, next) => {
+// POST /api/stock/addition - Record stock addition
+router.post('/addition', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    // Get the movement to reverse
-    const [movements] = await query('SELECT * FROM stock_movements WHERE id = $1', [req.params.id]);
+    const { medicine_id, quantity, batch_number, notes } = req.body;
+
+    if (!medicine_id || !quantity || quantity <= 0) {
+      return res.status(400).json({ success: false, error: 'Medicine ID and valid quantity are required' });
+    }
+
+    // Check medicine exists - verify business ownership
+    let medicineQuery = 'SELECT * FROM medicines WHERE id = $1';
+    const medicineParams = [medicine_id];
     
-    if (movements.length === 0) {
-      return res.status(404).json({ success: false, error: 'Stock movement not found' });
+    if (req.businessId) {
+      medicineQuery += ' AND business_id = $2';
+      medicineParams.push(req.businessId);
     }
 
-    const movement = movements[0];
-
-    // Reverse the stock change
-    let stockChange = 0;
-    if (movement.type === 'ADDITION' || movement.type === 'PURCHASE') {
-      stockChange = -movement.quantity;
-    } else if (movement.type === 'SALE' || movement.type === 'LOSS') {
-      stockChange = movement.quantity;
+    const [medicines] = await query(medicineQuery, medicineParams);
+    
+    if (medicines.length === 0) {
+      return res.status(404).json({ success: false, error: 'Medicine not found' });
     }
 
-    console.log(`🗑️ Reversing stock movement ${req.params.id} for medicine ${movement.medicine_id}: ${stockChange}`);
+    const medicine = medicines[0];
+    const previousStock = medicine.stock_quantity;
+    const newStock = previousStock + quantity;
 
+    // Update medicine stock
     await query(
-      'UPDATE medicines SET stock_quantity = stock_quantity + $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [stockChange, movement.medicine_id]
+      'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [newStock, medicine_id]
     );
 
-    await query('DELETE FROM stock_movements WHERE id = $1', [req.params.id]);
+    // Get user name
+    const [userResult] = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    const performedByName = getFirst(userResult).name || 'Unknown';
 
-    res.json({ success: true, message: 'Stock movement deleted and reversed' });
+    // Record stock movement with business_id
+    const movementId = uuidv4();
+    await query(`
+      INSERT INTO stock_movements (
+        id, business_id, medicine_id, medicine_name, type, quantity, batch_number, notes,
+        created_by, performed_by_name, performed_by_role,
+        previous_stock, new_stock, created_at
+      )
+      VALUES ($1, $2, $3, $4, 'ADDITION', $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+    `, [
+      movementId, req.businessId || null, medicine_id, medicine.name, quantity, batch_number || null, notes || null,
+      req.user.id, performedByName, req.user.role, previousStock, newStock
+    ]);
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id: movementId,
+        medicine_id,
+        medicine_name: medicine.name,
+        type: 'ADDITION',
+        quantity,
+        previous_stock: previousStock,
+        new_stock: newStock,
+        batch_number,
+        notes
+      },
+      message: 'Stock addition recorded successfully'
+    });
   } catch (error) {
-    console.error('❌ Delete stock movement error:', error);
-    next(error);
-  }
-});
-
-// GET /api/stock/low-stock - Get medicines with low stock
-router.get('/low-stock', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
-  try {
-    const [medicines] = await query(`
-      SELECT id, name, generic_name, category, stock_quantity, reorder_level, cost_price, unit_price
-      FROM medicines
-      WHERE stock_quantity <= reorder_level
-      ORDER BY stock_quantity ASC
-    `);
-
-    res.json({ success: true, data: medicines });
-  } catch (error) {
-    console.error('❌ Low stock query error:', error);
-    next(error);
-  }
-});
-
-// GET /api/stock/expiring - Get medicines expiring soon
-router.get('/expiring', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
-  try {
-    const days = parseInt(req.query.days) || 30;
-    const today = new Date().toISOString().split('T')[0];
-    const futureDate = new Date();
-    futureDate.setDate(futureDate.getDate() + days);
-    const futureDateStr = futureDate.toISOString().split('T')[0];
-
-    const [medicines] = await query(`
-      SELECT id, name, generic_name, category, stock_quantity, expiry_date, cost_price, unit_price
-      FROM medicines
-      WHERE expiry_date BETWEEN $1 AND $2
-      ORDER BY expiry_date ASC
-    `, [today, futureDateStr]);
-
-    res.json({ success: true, data: medicines });
-  } catch (error) {
-    console.error('❌ Expiring stock query error:', error);
     next(error);
   }
 });

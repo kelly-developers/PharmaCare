@@ -1,7 +1,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { query, pool } = require('../config/database');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, requireBusinessContext } = require('../middleware/auth');
 
 const router = express.Router();
 
@@ -31,7 +31,8 @@ const generateTransactionId = () => {
 const getFirst = (results) => results[0] || {};
 
 // POST /api/sales - Create sale with idempotency protection
-router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+// FIXED: Include business_id for multi-tenancy
+router.post('/', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   const client = await pool.connect();
   
   try {
@@ -40,6 +41,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
     console.log('🚀 Creating sale request received');
     console.log('📦 Items count:', items?.length || 0);
     console.log('💳 Payment method:', payment_method);
+    console.log('🏢 Business ID:', req.businessId);
 
     // Check for duplicate request using idempotency key
     const requestKey = idempotency_key || `${req.user.id}-${JSON.stringify(items)}-${Date.now()}`;
@@ -81,17 +83,23 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
     let totalProfit = 0;
     let totalCost = 0;
 
-    // Calculate totals and validate stock
+    // Calculate totals and validate stock - ONLY from this business's medicines
     for (const item of items) {
       const medicineId = item.medicine_id || item.medicineId;
       if (!medicineId) {
         throw new Error('Medicine ID is required for each item');
       }
 
-      const medicineResult = await client.query(
-        'SELECT id, name, unit_price, cost_price, stock_quantity, units FROM medicines WHERE id = $1',
-        [medicineId]
-      );
+      // FIXED: Filter by business_id
+      let medicineQuery = 'SELECT id, name, unit_price, cost_price, stock_quantity, units FROM medicines WHERE id = $1';
+      const medicineParams = [medicineId];
+      
+      if (req.businessId) {
+        medicineQuery += ' AND business_id = $2';
+        medicineParams.push(req.businessId);
+      }
+
+      const medicineResult = await client.query(medicineQuery, medicineParams);
 
       if (medicineResult.rows.length === 0) {
         throw new Error(`Medicine not found: ${medicineId}`);
@@ -151,15 +159,15 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
     const safeCustomerPhone = customer_phone || '';
     const safeCustomerName = customer_name || 'Walk-in';
 
-    // Insert sale record
+    // FIXED: Insert sale record with business_id
     await client.query(`
       INSERT INTO sales (
-        id, cashier_id, cashier_name, total_amount, discount, final_amount,
+        id, business_id, cashier_id, cashier_name, total_amount, discount, final_amount,
         profit, payment_method, customer_name, customer_phone, notes, created_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
     `, [
-      saleId, req.user.id, cashierName, subtotal, discountAmount, finalAmount,
+      saleId, req.businessId || null, req.user.id, cashierName, subtotal, discountAmount, finalAmount,
       finalProfit, safePaymentMethod, safeCustomerName, safeCustomerPhone, notes || null
     ]);
 
@@ -201,17 +209,17 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
       const newStock = previousStock - item.stock_deduction;
       console.log('📦 Stock updated:', item.medicine_name, previousStock, '->', newStock);
 
-      // Record stock movement
+      // FIXED: Record stock movement with business_id
       const movementId = uuidv4();
       await client.query(`
         INSERT INTO stock_movements (
-          id, medicine_id, medicine_name, type, quantity, reference_id,
+          id, business_id, medicine_id, medicine_name, type, quantity, reference_id,
           created_by, performed_by_name, performed_by_role,
           previous_stock, new_stock, created_at
         )
-        VALUES ($1, $2, $3, 'SALE', $4, $5, $6, $7, $8, $9, $10, CURRENT_TIMESTAMP)
+        VALUES ($1, $2, $3, $4, 'SALE', $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
       `, [
-        movementId, medicineId, item.medicine_name, item.stock_deduction, saleId,
+        movementId, req.businessId || null, medicineId, item.medicine_name, item.stock_deduction, saleId,
         req.user.id, cashierName, req.user.role, previousStock, newStock
       ]);
     }
@@ -230,7 +238,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
         VALUES ($1, $2, $3, $4, $5, $6, 0, $6, 'PENDING', $7, $8, CURRENT_TIMESTAMP)
       `, [
         creditSaleId,
-        req.user.business_id || null,
+        req.businessId || null,
         saleId,
         safeCustomerName,
         safeCustomerPhone,
@@ -310,7 +318,8 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASH
 });
 
 // GET /api/sales - Get all sales (NO pagination - returns ALL sales)
-router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+// FIXED: Filter by business_id
+router.get('/', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     // Optional date filters
     const { startDate, endDate, cashierId, paymentMethod } = req.query;
@@ -318,6 +327,13 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, ne
     let whereClause = '1=1';
     const params = [];
     let paramIndex = 0;
+    
+    // CRITICAL: Filter by business_id
+    if (req.businessId) {
+      paramIndex++;
+      whereClause += ` AND s.business_id = $${paramIndex}`;
+      params.push(req.businessId);
+    }
     
     if (startDate && endDate) {
       paramIndex++;
@@ -384,10 +400,17 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, ne
 });
 
 // GET /api/sales/today - Get today's sales summary
-// FIXED: Exclude CREDIT sales from totals until they are paid
-router.get('/today', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+// FIXED: Filter by business_id
+router.get('/today', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
-    // Only count non-credit sales OR credit sales that are fully paid
+    let whereClause = "DATE(s.created_at) = CURRENT_DATE";
+    const params = [];
+    
+    if (req.businessId) {
+      whereClause += " AND s.business_id = $1";
+      params.push(req.businessId);
+    }
+
     const [summaryResult] = await query(`
       SELECT 
         COUNT(*) as transaction_count,
@@ -407,16 +430,24 @@ router.get('/today', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', '
           CASE WHEN s.payment_method = 'CREDIT' THEN s.final_amount ELSE 0 END
         ), 0) as total_credit_sales
       FROM sales s
-      WHERE DATE(s.created_at) = CURRENT_DATE
-    `);
+      WHERE ${whereClause}
+    `, params);
 
-    // Add paid credit sales from today
+    // Add paid credit sales from today - filter by business_id
+    let creditWhereClause = "DATE(cp.created_at) = CURRENT_DATE";
+    const creditParams = [];
+    
+    if (req.businessId) {
+      creditWhereClause += " AND cs.business_id = $1";
+      creditParams.push(req.businessId);
+    }
+
     const [paidCreditResult] = await query(`
       SELECT COALESCE(SUM(cp.amount), 0) as paid_credit_today
       FROM credit_payments cp
       JOIN credit_sales cs ON cp.credit_sale_id = cs.id
-      WHERE DATE(cp.created_at) = CURRENT_DATE
-    `);
+      WHERE ${creditWhereClause}
+    `, creditParams);
 
     const summary = getFirst(summaryResult);
     const paidCredit = parseFloat(getFirst(paidCreditResult).paid_credit_today) || 0;
@@ -442,10 +473,10 @@ router.get('/today', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', '
         ) as items
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
-      WHERE DATE(s.created_at) = CURRENT_DATE
+      WHERE ${whereClause}
       GROUP BY s.id
       ORDER BY s.created_at DESC
-    `);
+    `, params);
 
     res.json({
       success: true,
@@ -465,9 +496,17 @@ router.get('/today', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', '
 });
 
 // GET /api/sales/cashier/:cashierId/today
-router.get('/cashier/:cashierId/today', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+router.get('/cashier/:cashierId/today', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
     const cashierId = req.params.cashierId;
+    
+    let whereClause = 's.cashier_id = $1 AND DATE(s.created_at) = CURRENT_DATE';
+    const params = [cashierId];
+    
+    if (req.businessId) {
+      whereClause += ' AND s.business_id = $2';
+      params.push(req.businessId);
+    }
     
     const [sales] = await query(`
       SELECT 
@@ -490,23 +529,23 @@ router.get('/cashier/:cashierId/today', authenticate, authorize('ADMIN', 'MANAGE
         ) as items
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
-      WHERE s.cashier_id = $1 AND DATE(s.created_at) = CURRENT_DATE
+      WHERE ${whereClause}
       GROUP BY s.id
       ORDER BY s.created_at DESC
-    `, [cashierId]);
+    `, params);
 
     const summary = sales.reduce((acc, sale) => {
       acc.transaction_count = (acc.transaction_count || 0) + 1;
       acc.total_sales = (acc.total_sales || 0) + parseFloat(sale.final_amount);
-      acc.total_profit = (acc.total_profit || 0) + parseFloat(sale.profit);
+      acc.total_profit = (acc.total_profit || 0) + parseFloat(sale.profit || 0);
       return acc;
     }, {});
 
     res.json({
       success: true,
       data: {
-        cashierId,
         date: new Date().toISOString().split('T')[0],
+        cashierId,
         transactionCount: summary.transaction_count || 0,
         totalSales: summary.total_sales || 0,
         totalProfit: summary.total_profit || 0,
@@ -518,89 +557,19 @@ router.get('/cashier/:cashierId/today', authenticate, authorize('ADMIN', 'MANAGE
   }
 });
 
-// GET /api/sales/stats - Get sales statistics
-// FIXED: Exclude CREDIT sales from totals until they are paid
-router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+// GET /api/sales/credit - Get credit sales
+router.get('/credit', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    // Today's stats - exclude credit sales from totals
-    const [todayResult] = await query(`
-      SELECT 
-        COUNT(*) as count,
-        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN final_amount ELSE 0 END), 0) as total,
-        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN profit ELSE 0 END), 0) as profit,
-        COALESCE(SUM(CASE WHEN payment_method = 'CREDIT' THEN final_amount ELSE 0 END), 0) as credit_total
-      FROM sales WHERE DATE(created_at) = CURRENT_DATE
-    `);
-
-    // Month's stats - exclude credit sales from totals
-    const [monthResult] = await query(`
-      SELECT 
-        COUNT(*) as count,
-        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN final_amount ELSE 0 END), 0) as total,
-        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN profit ELSE 0 END), 0) as profit,
-        COALESCE(SUM(CASE WHEN payment_method = 'CREDIT' THEN final_amount ELSE 0 END), 0) as credit_total
-      FROM sales WHERE DATE(created_at) >= DATE_TRUNC('month', CURRENT_DATE)
-    `);
-
-    // Add paid credit amounts for today and month
-    const [paidCreditToday] = await query(`
-      SELECT COALESCE(SUM(cp.amount), 0) as paid
-      FROM credit_payments cp
-      WHERE DATE(cp.created_at) = CURRENT_DATE
-    `);
-
-    const [paidCreditMonth] = await query(`
-      SELECT COALESCE(SUM(cp.amount), 0) as paid
-      FROM credit_payments cp
-      WHERE DATE(cp.created_at) >= DATE_TRUNC('month', CURRENT_DATE)
-    `);
-
-    const today = getFirst(todayResult);
-    const month = getFirst(monthResult);
-    const paidToday = parseFloat(getFirst(paidCreditToday).paid) || 0;
-    const paidMonth = parseFloat(getFirst(paidCreditMonth).paid) || 0;
-
-    res.json({
-      success: true,
-      data: {
-        today: {
-          count: parseInt(today.count) || 0,
-          total: (parseFloat(today.total) || 0) + paidToday,
-          profit: parseFloat(today.profit) || 0,
-          creditTotal: parseFloat(today.credit_total) || 0,
-          paidCredit: paidToday
-        },
-        month: {
-          count: parseInt(month.count) || 0,
-          total: (parseFloat(month.total) || 0) + paidMonth,
-          profit: parseFloat(month.profit) || 0,
-          creditTotal: parseFloat(month.credit_total) || 0,
-          paidCredit: paidMonth
-        }
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// =================== CREDIT SALES ENDPOINTS ===================
-// NOTE: These MUST come BEFORE /:id route to prevent /credit being matched as an ID
-
-// GET /api/sales/credit - Get all credit sales
-router.get('/credit', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
-  try {
-    const { status, customerId } = req.query;
+    const { status } = req.query;
     
     let whereClause = '1=1';
     const params = [];
     let paramIndex = 0;
     
-    // Add business_id filter if user has one
-    if (req.user.business_id) {
+    if (req.businessId) {
       paramIndex++;
       whereClause += ` AND cs.business_id = $${paramIndex}`;
-      params.push(req.user.business_id);
+      params.push(req.businessId);
     }
     
     if (status) {
@@ -608,126 +577,18 @@ router.get('/credit', authenticate, authorize('ADMIN', 'MANAGER'), async (req, r
       whereClause += ` AND cs.status = $${paramIndex}`;
       params.push(status.toUpperCase());
     }
-    
-    if (customerId) {
-      paramIndex++;
-      whereClause += ` AND cs.customer_phone = $${paramIndex}`;
-      params.push(customerId);
-    }
 
-    const [credits] = await query(`
-      SELECT 
-        cs.*,
-        s.cashier_name,
-        s.created_at as sale_created_at,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'id', cp.id,
-              'amount', cp.amount,
-              'payment_method', cp.payment_method,
-              'received_by_name', cp.received_by_name,
-              'created_at', cp.created_at,
-              'notes', cp.notes
-            )
-          ) FILTER (WHERE cp.id IS NOT NULL), '[]'
-        ) as payments
+    const [creditSales] = await query(`
+      SELECT cs.*, s.created_at as sale_date
       FROM credit_sales cs
       LEFT JOIN sales s ON cs.sale_id = s.id
-      LEFT JOIN credit_payments cp ON cs.id = cp.credit_sale_id
       WHERE ${whereClause}
-      GROUP BY cs.id, s.cashier_name, s.created_at
       ORDER BY cs.created_at DESC
     `, params);
 
     res.json({
       success: true,
-      data: {
-        content: credits || [],
-        total: credits?.length || 0
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/sales/credit/summary - Get credit sales summary
-router.get('/credit/summary', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
-  try {
-    let whereClause = '1=1';
-    const params = [];
-    
-    if (req.user.business_id) {
-      whereClause += ` AND business_id = $1`;
-      params.push(req.user.business_id);
-    }
-
-    const [summary] = await query(`
-      SELECT 
-        COALESCE(SUM(balance_amount), 0) as total_outstanding,
-        COUNT(*) as total_credits,
-        COUNT(*) FILTER (WHERE status = 'PENDING') as pending_count,
-        COUNT(*) FILTER (WHERE status = 'PARTIAL') as partial_count,
-        COUNT(*) FILTER (WHERE status = 'PAID') as paid_count
-      FROM credit_sales
-      WHERE ${whereClause}
-    `, params);
-
-    const result = summary[0] || {};
-
-    res.json({
-      success: true,
-      data: {
-        total_outstanding: parseFloat(result.total_outstanding) || 0,
-        total_credits: parseInt(result.total_credits) || 0,
-        pending_count: parseInt(result.pending_count) || 0,
-        partial_count: parseInt(result.partial_count) || 0,
-        paid_count: parseInt(result.paid_count) || 0
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// GET /api/sales/credit/customer/:phone - Get customer credit history
-router.get('/credit/customer/:phone', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
-  try {
-    let whereClause = 'cs.customer_phone = $1';
-    const params = [req.params.phone];
-    
-    if (req.user.business_id) {
-      whereClause += ` AND cs.business_id = $2`;
-      params.push(req.user.business_id);
-    }
-
-    const [credits] = await query(`
-      SELECT 
-        cs.*,
-        s.cashier_name,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'id', cp.id,
-              'amount', cp.amount,
-              'payment_method', cp.payment_method,
-              'received_by_name', cp.received_by_name,
-              'created_at', cp.created_at
-            )
-          ) FILTER (WHERE cp.id IS NOT NULL), '[]'
-        ) as payments
-      FROM credit_sales cs
-      LEFT JOIN sales s ON cs.sale_id = s.id
-      LEFT JOIN credit_payments cp ON cs.id = cp.credit_sale_id
-      WHERE ${whereClause}
-      GROUP BY cs.id, s.cashier_name
-      ORDER BY cs.created_at DESC
-    `, params);
-
-    res.json({
-      success: true,
-      data: credits || []
+      data: creditSales
     });
   } catch (error) {
     next(error);
@@ -735,58 +596,59 @@ router.get('/credit/customer/:phone', authenticate, authorize('ADMIN', 'MANAGER'
 });
 
 // GET /api/sales/credit/:id - Get credit sale by ID
-router.get('/credit/:id', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
+router.get('/credit/:id', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [credits] = await query(`
-      SELECT 
-        cs.*,
-        s.cashier_name,
-        s.total_amount as sale_total,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'id', cp.id,
-              'amount', cp.amount,
-              'payment_method', cp.payment_method,
-              'received_by_name', cp.received_by_name,
-              'created_at', cp.created_at,
-              'notes', cp.notes
-            )
-          ) FILTER (WHERE cp.id IS NOT NULL), '[]'
-        ) as payments
+    let whereClause = 'cs.id = $1';
+    const params = [req.params.id];
+    
+    if (req.businessId) {
+      whereClause += ' AND cs.business_id = $2';
+      params.push(req.businessId);
+    }
+
+    const [creditSales] = await query(`
+      SELECT cs.*, s.created_at as sale_date
       FROM credit_sales cs
       LEFT JOIN sales s ON cs.sale_id = s.id
-      LEFT JOIN credit_payments cp ON cs.id = cp.credit_sale_id
-      WHERE cs.id = $1
-      GROUP BY cs.id, s.cashier_name, s.total_amount
-    `, [req.params.id]);
+      WHERE ${whereClause}
+    `, params);
 
-    if (!credits || credits.length === 0) {
+    if (creditSales.length === 0) {
       return res.status(404).json({ success: false, error: 'Credit sale not found' });
     }
 
+    // Get sale items
+    const [items] = await query(`
+      SELECT si.* FROM sale_items si WHERE si.sale_id = $1
+    `, [creditSales[0].sale_id]);
+
+    // Get payments
+    const [payments] = await query(`
+      SELECT * FROM credit_payments WHERE credit_sale_id = $1 ORDER BY created_at DESC
+    `, [req.params.id]);
+
     res.json({
       success: true,
-      data: credits[0]
+      data: {
+        ...creditSales[0],
+        items,
+        payments
+      }
     });
   } catch (error) {
     next(error);
   }
 });
 
-// POST /api/sales/credit/payment - Record a payment for a credit sale
-router.post('/credit/payment', authenticate, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
+// POST /api/sales/credit/:id/payment - Record credit payment
+router.post('/credit/:id/payment', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'CASHIER'), async (req, res, next) => {
   const client = await pool.connect();
   
   try {
-    const { credit_sale_id, amount, payment_method, notes } = req.body;
+    const { amount, payment_method, notes } = req.body;
     
-    if (!credit_sale_id || !amount) {
-      return res.status(400).json({ success: false, error: 'Credit sale ID and amount are required' });
-    }
-    
-    if (amount <= 0) {
-      return res.status(400).json({ success: false, error: 'Amount must be greater than 0' });
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ success: false, error: 'Valid payment amount is required' });
     }
 
     await client.query('BEGIN');
@@ -794,100 +656,84 @@ router.post('/credit/payment', authenticate, authorize('ADMIN', 'MANAGER', 'CASH
     const config = require('../config/database').config;
     await client.query(`SET search_path TO ${config.schema}, public`);
 
-    // Get current credit sale
-    const creditResult = await client.query(
-      'SELECT * FROM credit_sales WHERE id = $1',
-      [credit_sale_id]
-    );
+    // Get credit sale - verify business ownership
+    let creditQuery = 'SELECT * FROM credit_sales WHERE id = $1';
+    const creditParams = [req.params.id];
+    
+    if (req.businessId) {
+      creditQuery += ' AND business_id = $2';
+      creditParams.push(req.businessId);
+    }
 
+    const creditResult = await client.query(creditQuery, creditParams);
+    
     if (creditResult.rows.length === 0) {
       await client.query('ROLLBACK');
       return res.status(404).json({ success: false, error: 'Credit sale not found' });
     }
 
-    const credit = creditResult.rows[0];
-    const paymentAmount = parseFloat(amount);
-    
-    if (paymentAmount > parseFloat(credit.balance_amount)) {
-      await client.query('ROLLBACK');
-      return res.status(400).json({ 
-        success: false, 
-        error: `Payment amount (${paymentAmount}) exceeds balance (${credit.balance_amount})` 
-      });
-    }
+    const creditSale = creditResult.rows[0];
+    const currentBalance = parseFloat(creditSale.balance_amount);
+    const paymentAmount = Math.min(parseFloat(amount), currentBalance);
+    const newBalance = currentBalance - paymentAmount;
+    const newPaidAmount = parseFloat(creditSale.paid_amount) + paymentAmount;
+    const newStatus = newBalance <= 0 ? 'PAID' : 'PARTIAL';
 
-    // Get user info
-    const userResult = await client.query('SELECT name FROM users WHERE id = $1', [req.user.id]);
-    const userName = userResult.rows[0]?.name || 'Unknown';
-
-    // Create payment record
+    // Record payment
     const paymentId = uuidv4();
-    await client.query(`
-      INSERT INTO credit_payments (id, credit_sale_id, amount, payment_method, received_by, received_by_name, notes)
-      VALUES ($1, $2, $3, $4, $5, $6, $7)
-    `, [
-      paymentId,
-      credit_sale_id,
-      paymentAmount,
-      (payment_method || 'CASH').toUpperCase(),
-      req.user.id,
-      userName,
-      notes || null
-    ]);
-
-    // Update credit sale balances
-    const newPaidAmount = parseFloat(credit.paid_amount) + paymentAmount;
-    const newBalanceAmount = parseFloat(credit.total_amount) - newPaidAmount;
-    const newStatus = newBalanceAmount <= 0 ? 'PAID' : (newPaidAmount > 0 ? 'PARTIAL' : 'PENDING');
+    const userResult = await client.query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    const receivedByName = userResult.rows[0]?.name || 'Unknown';
 
     await client.query(`
-      UPDATE credit_sales 
-      SET paid_amount = $1, balance_amount = $2, status = $3, updated_at = CURRENT_TIMESTAMP
+      INSERT INTO credit_payments (
+        id, credit_sale_id, amount, payment_method, received_by, received_by_name, notes, created_at
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+    `, [paymentId, req.params.id, paymentAmount, payment_method || 'CASH', req.user.id, receivedByName, notes || null]);
+
+    // Update credit sale
+    await client.query(`
+      UPDATE credit_sales SET
+        paid_amount = $1,
+        balance_amount = $2,
+        status = $3,
+        updated_at = CURRENT_TIMESTAMP
       WHERE id = $4
-    `, [newPaidAmount, newBalanceAmount, newStatus, credit_sale_id]);
+    `, [newPaidAmount, newBalance, newStatus, req.params.id]);
 
     await client.query('COMMIT');
 
-    // Fetch updated credit sale
-    const [updatedCredits] = await query(`
-      SELECT 
-        cs.*,
-        COALESCE(
-          json_agg(
-            json_build_object(
-              'id', cp.id,
-              'amount', cp.amount,
-              'payment_method', cp.payment_method,
-              'received_by_name', cp.received_by_name,
-              'created_at', cp.created_at
-            )
-          ) FILTER (WHERE cp.id IS NOT NULL), '[]'
-        ) as payments
-      FROM credit_sales cs
-      LEFT JOIN credit_payments cp ON cs.id = cp.credit_sale_id
-      WHERE cs.id = $1
-      GROUP BY cs.id
-    `, [credit_sale_id]);
-
     res.json({
       success: true,
-      data: updatedCredits[0],
-      message: newStatus === 'PAID' ? 'Credit fully paid!' : 'Payment recorded successfully'
+      data: {
+        payment_id: paymentId,
+        amount_paid: paymentAmount,
+        new_balance: newBalance,
+        status: newStatus
+      },
+      message: newBalance <= 0 ? 'Credit fully paid' : 'Payment recorded successfully'
     });
 
   } catch (error) {
     await client.query('ROLLBACK').catch(e => console.error('Rollback error:', e));
+    console.error('❌ Credit payment error:', error.message);
     next(error);
   } finally {
     client.release();
   }
 });
 
-// =================== END CREDIT SALES ENDPOINTS ===================
-
 // GET /api/sales/:id - Get sale by ID
-router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+router.get('/:id', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
+    let whereClause = 's.id = $1';
+    const params = [req.params.id];
+    
+    if (req.businessId) {
+      whereClause += ' AND s.business_id = $2';
+      params.push(req.businessId);
+    }
+
     const [sales] = await query(`
       SELECT 
         s.*,
@@ -909,9 +755,9 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CA
         ) as items
       FROM sales s
       LEFT JOIN sale_items si ON s.id = si.sale_id
-      WHERE s.id = $1
+      WHERE ${whereClause}
       GROUP BY s.id
-    `, [req.params.id]);
+    `, params);
 
     if (sales.length === 0) {
       return res.status(404).json({ success: false, error: 'Sale not found' });
@@ -923,8 +769,8 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CA
   }
 });
 
-// DELETE /api/sales/:id - Delete sale (void)
-router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) => {
+// DELETE /api/sales/:id - Void/cancel sale (admin only)
+router.delete('/:id', authenticate, requireBusinessContext, authorize('ADMIN'), async (req, res, next) => {
   const client = await pool.connect();
   
   try {
@@ -932,61 +778,51 @@ router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) =
     
     const config = require('../config/database').config;
     await client.query(`SET search_path TO ${config.schema}, public`);
+
+    // Verify business ownership
+    let saleQuery = 'SELECT * FROM sales WHERE id = $1';
+    const saleParams = [req.params.id];
     
-    // Get sale items to reverse stock
-    const itemsResult = await client.query('SELECT * FROM sale_items WHERE sale_id = $1', [req.params.id]);
-    const items = itemsResult.rows;
-
-    // Get user info
-    const userResult = await client.query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
-    const user = userResult.rows[0] || { name: 'Unknown', role: 'UNKNOWN' };
-
-    // Reverse stock changes
-    for (const item of items) {
-      // Get current stock
-      const stockResult = await client.query(
-        'SELECT stock_quantity FROM medicines WHERE id = $1',
-        [item.medicine_id]
-      );
-      const previousStock = parseInt(stockResult.rows[0]?.stock_quantity) || 0;
-      const newStock = previousStock + item.quantity;
-
-      await client.query(
-        'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-        [newStock, item.medicine_id]
-      );
-      
-      // Record reversal movement
-      const movementId = uuidv4();
-      await client.query(`
-        INSERT INTO stock_movements (
-          id, medicine_id, medicine_name, type, quantity, reference_id, reason,
-          created_by, performed_by_name, performed_by_role, previous_stock, new_stock, created_at
-        )
-        VALUES ($1, $2, $3, 'ADJUSTMENT', $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
-      `, [
-        movementId, item.medicine_id, item.medicine_name, item.quantity,
-        req.params.id, 'Sale voided', req.user.id, user.name, user.role,
-        previousStock, newStock
-      ]);
+    if (req.businessId) {
+      saleQuery += ' AND business_id = $2';
+      saleParams.push(req.businessId);
     }
 
-    // Delete related credit sale if exists
-    await client.query('DELETE FROM credit_payments WHERE credit_sale_id IN (SELECT id FROM credit_sales WHERE sale_id = $1)', [req.params.id]);
-    await client.query('DELETE FROM credit_sales WHERE sale_id = $1', [req.params.id]);
-
-    // Delete sale items and sale
-    await client.query('DELETE FROM sale_items WHERE sale_id = $1', [req.params.id]);
-    await client.query('DELETE FROM sales WHERE id = $1', [req.params.id]);
+    const saleResult = await client.query(saleQuery, saleParams);
     
-    // Delete related stock movements for the original sale
-    await client.query("DELETE FROM stock_movements WHERE reference_id = $1 AND type = 'SALE'", [req.params.id]);
+    if (saleResult.rows.length === 0) {
+      await client.query('ROLLBACK');
+      return res.status(404).json({ success: false, error: 'Sale not found' });
+    }
+
+    // Get sale items to restore stock
+    const itemsResult = await client.query(
+      'SELECT * FROM sale_items WHERE sale_id = $1',
+      [req.params.id]
+    );
+
+    // Restore stock for each item
+    for (const item of itemsResult.rows) {
+      await client.query(
+        'UPDATE medicines SET stock_quantity = stock_quantity + $1 WHERE id = $2',
+        [item.quantity, item.medicine_id]
+      );
+    }
+
+    // Delete sale items
+    await client.query('DELETE FROM sale_items WHERE sale_id = $1', [req.params.id]);
+    
+    // Delete credit sale if exists
+    await client.query('DELETE FROM credit_sales WHERE sale_id = $1', [req.params.id]);
+    
+    // Delete the sale
+    await client.query('DELETE FROM sales WHERE id = $1', [req.params.id]);
 
     await client.query('COMMIT');
 
-    res.json({ success: true, message: 'Sale voided successfully' });
+    res.json({ success: true, message: 'Sale voided and stock restored' });
   } catch (error) {
-    await client.query('ROLLBACK');
+    await client.query('ROLLBACK').catch(e => console.error('Rollback error:', e));
     next(error);
   } finally {
     client.release();

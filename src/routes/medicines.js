@@ -1,12 +1,13 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { query } = require('../config/database');
-const { authenticate, authorize } = require('../middleware/auth');
+const { authenticate, authorize, requireBusinessContext } = require('../middleware/auth');
 
 const router = express.Router();
 
 // GET /api/medicines - Get all medicines (NO pagination - returns ALL)
-router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+// FIXED: Filter by business_id for multi-tenant isolation
+router.get('/', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
     const search = req.query.search || '';
     const category = req.query.category || '';
@@ -14,6 +15,13 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
     let whereClause = '1=1';
     const params = [];
     let paramIndex = 0;
+
+    // CRITICAL: Filter by business_id for multi-tenancy
+    if (req.businessId) {
+      paramIndex++;
+      whereClause += ` AND business_id = $${paramIndex}`;
+      params.push(req.businessId);
+    }
 
     if (search) {
       paramIndex++;
@@ -33,7 +41,7 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
         id, name, generic_name, category, description, manufacturer,
         unit_price, cost_price, stock_quantity, reorder_level,
         expiry_date, batch_number, requires_prescription, product_type,
-        units, image_url, created_at, updated_at,
+        units, image_url, created_at, updated_at, business_id,
         (stock_quantity * cost_price) as stock_value,
         CASE 
           WHEN stock_quantity = 0 THEN 'Out of Stock'
@@ -63,14 +71,22 @@ router.get('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHI
 });
 
 // GET /api/medicines/categories - Get all distinct categories
-router.get('/categories', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+router.get('/categories', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
+    let whereClause = "category IS NOT NULL AND category != ''";
+    const params = [];
+    
+    if (req.businessId) {
+      whereClause += ' AND business_id = $1';
+      params.push(req.businessId);
+    }
+
     const [categories] = await query(`
       SELECT DISTINCT category 
       FROM medicines 
-      WHERE category IS NOT NULL AND category != ''
+      WHERE ${whereClause}
       ORDER BY category
-    `);
+    `, params);
     res.json({ 
       success: true, 
       data: categories.map(c => c.category).filter(Boolean) 
@@ -81,14 +97,22 @@ router.get('/categories', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIS
 });
 
 // GET /api/medicines/low-stock - Get low stock medicines
-router.get('/low-stock', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/low-stock', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
+    let whereClause = 'stock_quantity <= reorder_level';
+    const params = [];
+    
+    if (req.businessId) {
+      whereClause += ' AND business_id = $1';
+      params.push(req.businessId);
+    }
+
     const [medicines] = await query(`
       SELECT *
       FROM medicines
-      WHERE stock_quantity <= reorder_level
+      WHERE ${whereClause}
       ORDER BY stock_quantity ASC
-    `);
+    `, params);
 
     res.json({ success: true, data: medicines });
   } catch (error) {
@@ -97,17 +121,26 @@ router.get('/low-stock', authenticate, authorize('ADMIN', 'MANAGER'), async (req
 });
 
 // GET /api/medicines/expiring - Get expiring medicines
-router.get('/expiring', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/expiring', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const days = parseInt(req.query.days) || 90;
+    const params = [days];
+    let paramIndex = 1;
+
+    let whereClause = `expiry_date <= CURRENT_DATE + INTERVAL '1 day' * $1 AND expiry_date IS NOT NULL`;
+    
+    if (req.businessId) {
+      paramIndex++;
+      whereClause += ` AND business_id = $${paramIndex}`;
+      params.push(req.businessId);
+    }
 
     const [medicines] = await query(`
       SELECT *
       FROM medicines
-      WHERE expiry_date <= CURRENT_DATE + INTERVAL '1 day' * $1
-        AND expiry_date IS NOT NULL
+      WHERE ${whereClause}
       ORDER BY expiry_date ASC
-    `, [days]);
+    `, params);
 
     res.json({ success: true, data: medicines });
   } catch (error) {
@@ -116,12 +149,20 @@ router.get('/expiring', authenticate, authorize('ADMIN', 'MANAGER'), async (req,
 });
 
 // GET /api/medicines/stats - Get medicine statistics
-router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+router.get('/stats', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    const [totalResult] = await query('SELECT COUNT(*) as total FROM medicines');
-    const [lowStockResult] = await query('SELECT COUNT(*) as count FROM medicines WHERE stock_quantity <= reorder_level');
-    const [expiringResult] = await query("SELECT COUNT(*) as count FROM medicines WHERE expiry_date <= CURRENT_DATE + INTERVAL '90 days'");
-    const [outOfStockResult] = await query('SELECT COUNT(*) as count FROM medicines WHERE stock_quantity = 0');
+    let whereClause = '1=1';
+    const params = [];
+    
+    if (req.businessId) {
+      whereClause = 'business_id = $1';
+      params.push(req.businessId);
+    }
+
+    const [totalResult] = await query(`SELECT COUNT(*) as total FROM medicines WHERE ${whereClause}`, params);
+    const [lowStockResult] = await query(`SELECT COUNT(*) as count FROM medicines WHERE ${whereClause} AND stock_quantity <= reorder_level`, params);
+    const [expiringResult] = await query(`SELECT COUNT(*) as count FROM medicines WHERE ${whereClause} AND expiry_date <= CURRENT_DATE + INTERVAL '90 days'`, params);
+    const [outOfStockResult] = await query(`SELECT COUNT(*) as count FROM medicines WHERE ${whereClause} AND stock_quantity = 0`, params);
 
     res.json({
       success: true,
@@ -138,11 +179,20 @@ router.get('/stats', authenticate, authorize('ADMIN', 'MANAGER'), async (req, re
 });
 
 // GET /api/medicines/:id - Get medicine by ID
-router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
+router.get('/:id', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
+    let whereClause = 'id = $1';
+    const params = [req.params.id];
+    
+    // Ensure user can only access medicines from their business
+    if (req.businessId) {
+      whereClause += ' AND business_id = $2';
+      params.push(req.businessId);
+    }
+
     const [medicines] = await query(
-      'SELECT * FROM medicines WHERE id = $1',
-      [req.params.id]
+      `SELECT * FROM medicines WHERE ${whereClause}`,
+      params
     );
 
     if (medicines.length === 0) {
@@ -156,7 +206,8 @@ router.get('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CA
 });
 
 // POST /api/medicines - Create medicine
-router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
+// FIXED: Include business_id for multi-tenancy
+router.post('/', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
     console.log('📥 Received medicine data:', req.body);
     
@@ -274,15 +325,16 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
 
     const id = uuidv4();
 
-    // Prepare insert data with proper handling of empty strings
+    // FIXED: Include business_id in insert
     const insertData = [
       id, 
+      req.businessId || null, // business_id for multi-tenancy
       name.trim(), 
       finalGenericName && finalGenericName.trim() ? finalGenericName.trim() : null,
       category.trim(),
       description && description.trim() ? description.trim() : null,
       manufacturer && manufacturer.trim() ? manufacturer.trim() : null,
-      calculatedUnitPrice, // Use calculated unit price
+      calculatedUnitPrice,
       costPriceValue,
       stockQuantityValue,
       reorderLevelValue,
@@ -296,6 +348,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
 
     console.log('📦 Inserting medicine with data:', {
       id,
+      business_id: req.businessId,
       name: name.trim(),
       generic_name: finalGenericName,
       category: category.trim(),
@@ -310,11 +363,11 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
 
     await query(`
       INSERT INTO medicines (
-        id, name, generic_name, category, description, manufacturer,
+        id, business_id, name, generic_name, category, description, manufacturer,
         unit_price, cost_price, stock_quantity, reorder_level,
         expiry_date, batch_number, requires_prescription, product_type, 
         units, image_url, created_at, updated_at
-      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, insertData);
 
     // Get the created medicine
@@ -367,7 +420,7 @@ router.post('/', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), asyn
 });
 
 // PUT /api/medicines/:id - Update medicine
-router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
+router.put('/:id', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
   try {
     console.log('📝 Updating medicine:', req.params.id, req.body);
     
@@ -425,8 +478,15 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
       });
     }
 
-    // Check if medicine exists
-    const [existing] = await query('SELECT id FROM medicines WHERE id = $1', [req.params.id]);
+    // Check if medicine exists AND belongs to this business
+    let whereClause = 'id = $1';
+    const checkParams = [req.params.id];
+    if (req.businessId) {
+      whereClause += ' AND business_id = $2';
+      checkParams.push(req.businessId);
+    }
+
+    const [existing] = await query(`SELECT id FROM medicines WHERE ${whereClause}`, checkParams);
     if (existing.length === 0) {
       return res.status(404).json({ success: false, error: 'Medicine not found' });
     }
@@ -491,7 +551,7 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
 });
 
 // DELETE /api/medicines/:id - Delete medicine
-router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) => {
+router.delete('/:id', authenticate, requireBusinessContext, authorize('ADMIN'), async (req, res, next) => {
   try {
     // Check if medicine has sale items
     const [saleItems] = await query(
@@ -502,239 +562,21 @@ router.delete('/:id', authenticate, authorize('ADMIN'), async (req, res, next) =
     if (parseInt(saleItems[0]?.count) > 0) {
       return res.status(400).json({ 
         success: false, 
-        error: 'Cannot delete medicine with sales history' 
+        error: 'Cannot delete medicine with existing sales. Please archive instead.' 
       });
     }
 
-    await query('DELETE FROM medicines WHERE id = $1', [req.params.id]);
+    // Verify medicine belongs to this business
+    let whereClause = 'id = $1';
+    const params = [req.params.id];
+    if (req.businessId) {
+      whereClause += ' AND business_id = $2';
+      params.push(req.businessId);
+    }
+
+    const result = await query(`DELETE FROM medicines WHERE ${whereClause}`, params);
+
     res.json({ success: true, message: 'Medicine deleted successfully' });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// POST /api/medicines/:id/add-stock - Add stock
-router.post('/:id/add-stock', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
-  try {
-    const { quantity, batch_number, expiry_date, cost_price, notes, reason } = req.body;
-
-    if (!quantity || quantity <= 0) {
-      return res.status(400).json({ success: false, error: 'Valid quantity is required' });
-    }
-
-    // Get current medicine
-    const [medicines] = await query('SELECT * FROM medicines WHERE id = $1', [req.params.id]);
-    if (medicines.length === 0) {
-      return res.status(404).json({ success: false, error: 'Medicine not found' });
-    }
-
-    const medicine = medicines[0];
-    const previousStock = medicine.stock_quantity;
-    const newStock = previousStock + parseInt(quantity);
-
-    // Get user info for tracking
-    const [userResult] = await query('SELECT name, role FROM users WHERE id = $1', [req.user.id]);
-    const user = userResult && userResult.length > 0 ? userResult[0] : { name: 'Unknown', role: 'UNKNOWN' };
-
-    // Update medicine stock and optionally update cost price and batch info
-    const updateFields = [];
-    const updateValues = [];
-    let paramIndex = 1;
-
-    updateFields.push(`stock_quantity = $${paramIndex++}`);
-    updateValues.push(newStock);
-
-    updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
-    
-    if (cost_price) {
-      updateFields.push(`cost_price = $${paramIndex++}`);
-      updateValues.push(parseFloat(cost_price));
-    }
-    
-    if (batch_number) {
-      updateFields.push(`batch_number = $${paramIndex++}`);
-      updateValues.push(batch_number);
-    }
-    
-    if (expiry_date) {
-      updateFields.push(`expiry_date = $${paramIndex++}`);
-      updateValues.push(expiry_date);
-    }
-
-    updateValues.push(req.params.id);
-
-    await query(
-      `UPDATE medicines SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`,
-      updateValues
-    );
-
-    // Record stock movement with all required fields
-    const movementId = uuidv4();
-    await query(`
-      INSERT INTO stock_movements (
-        id, medicine_id, medicine_name, type, quantity, batch_number, 
-        reason, notes, created_by, performed_by_name, performed_by_role,
-        previous_stock, new_stock, created_at
-      )
-      VALUES ($1, $2, $3, 'ADDITION', $4, $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
-    `, [
-      movementId, 
-      req.params.id, 
-      medicine.name, 
-      parseInt(quantity), 
-      batch_number || null, 
-      reason || 'Stock addition',
-      notes || null, 
-      req.user.id, 
-      user.name || 'Unknown',
-      user.role || 'UNKNOWN',
-      previousStock, 
-      newStock
-    ]);
-
-    res.json({
-      success: true,
-      data: {
-        medicine_id: req.params.id,
-        quantity_added: quantity,
-        previous_stock: previousStock,
-        new_stock: newStock,
-        batch_number: batch_number || medicine.batch_number,
-        expiry_date: expiry_date || medicine.expiry_date,
-        cost_price: cost_price || medicine.cost_price
-      },
-      message: 'Stock added successfully'
-    });
-  } catch (error) {
-    console.error('Add stock error:', error);
-    next(error);
-  }
-});
-
-// POST /api/medicines/:id/deduct-stock - Deduct stock
-router.post('/:id/deduct-stock', authenticate, authorize('ADMIN', 'CASHIER'), async (req, res, next) => {
-  try {
-    const { quantity, notes, reference_id } = req.body;
-
-    if (!quantity || quantity <= 0) {
-      return res.status(400).json({ success: false, error: 'Valid quantity is required' });
-    }
-
-    // Check available stock
-    const [medicines] = await query('SELECT * FROM medicines WHERE id = $1', [req.params.id]);
-    
-    if (medicines.length === 0) {
-      return res.status(404).json({ success: false, error: 'Medicine not found' });
-    }
-
-    const medicine = medicines[0];
-
-    if (medicine.stock_quantity < quantity) {
-      return res.status(400).json({ success: false, error: 'Insufficient stock' });
-    }
-
-    const previousStock = medicine.stock_quantity;
-    const newStock = previousStock - parseInt(quantity);
-
-    // Update medicine stock
-    await query(
-      'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [newStock, req.params.id]
-    );
-
-    res.json({
-      success: true,
-      data: {
-        medicine_id: req.params.id,
-        quantity_deducted: quantity,
-        previous_stock: previousStock,
-        new_stock: newStock
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// PATCH /api/medicines/:id/stock - Update stock quantity directly
-router.patch('/:id/stock', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
-  try {
-    const { stock_quantity } = req.body;
-
-    if (stock_quantity === undefined || stock_quantity === null) {
-      return res.status(400).json({ success: false, error: 'Stock quantity is required' });
-    }
-
-    if (parseInt(stock_quantity) < 0) {
-      return res.status(400).json({ success: false, error: 'Stock quantity cannot be negative' });
-    }
-
-    await query(
-      'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
-      [parseInt(stock_quantity), req.params.id]
-    );
-
-    const [medicines] = await query(
-      'SELECT * FROM medicines WHERE id = $1',
-      [req.params.id]
-    );
-
-    res.json({ 
-      success: true, 
-      data: medicines[0],
-      message: 'Stock updated successfully'
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-// POST /api/medicines/:id/update-batch - Update batch information
-router.post('/:id/update-batch', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
-  try {
-    const { batch_number, expiry_date } = req.body;
-
-    const [medicines] = await query('SELECT * FROM medicines WHERE id = $1', [req.params.id]);
-    if (medicines.length === 0) {
-      return res.status(404).json({ success: false, error: 'Medicine not found' });
-    }
-
-    const updateFields = [];
-    const updateValues = [];
-    let paramIndex = 1;
-
-    if (batch_number !== undefined) {
-      updateFields.push(`batch_number = $${paramIndex++}`);
-      updateValues.push(batch_number || null);
-    }
-
-    if (expiry_date !== undefined) {
-      updateFields.push(`expiry_date = $${paramIndex++}`);
-      updateValues.push(expiry_date || null);
-    }
-
-    if (updateFields.length === 0) {
-      return res.status(400).json({ success: false, error: 'No fields to update' });
-    }
-
-    updateFields.push(`updated_at = CURRENT_TIMESTAMP`);
-    updateValues.push(req.params.id);
-
-    await query(
-      `UPDATE medicines SET ${updateFields.join(', ')} WHERE id = $${paramIndex}`,
-      updateValues
-    );
-
-    const [updatedMedicine] = await query(
-      'SELECT * FROM medicines WHERE id = $1',
-      [req.params.id]
-    );
-
-    res.json({ 
-      success: true, 
-      data: updatedMedicine[0],
-      message: 'Batch information updated successfully'
-    });
   } catch (error) {
     next(error);
   }
