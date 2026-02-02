@@ -44,7 +44,7 @@ router.get('/', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGE
   }
 });
 
-// GET /api/categories/stats - Get category statistics
+// GET /api/categories/stats - Get category statistic
 router.get('/stats', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     let whereClause = '1=1';
