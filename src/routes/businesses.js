@@ -110,6 +110,80 @@ router.get('/stats', authenticate, isSuperAdmin, async (req, res, next) => {
   }
 });
 
+// GET /api/businesses/my-business - Get current user's business (all authenticated users)
+// IMPORTANT: This route MUST be before /:id to avoid being caught by that route
+router.get('/my-business', authenticate, async (req, res, next) => {
+  try {
+    if (!req.user.business_id) {
+      return res.status(404).json({
+        success: false,
+        error: 'No business associated with this user'
+      });
+    }
+
+    const [businesses] = await query(
+      `SELECT b.*,
+              (SELECT COUNT(*) FROM users u WHERE u.business_id = b.id) as users_count
+       FROM businesses b
+       WHERE b.id = $1`,
+      [req.user.business_id]
+    );
+
+    if (businesses.length === 0) {
+      return res.status(404).json({
+        success: false,
+        error: 'Business not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: businesses[0]
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PUT /api/businesses/my-business - Update current user's business (Business Admin only)
+// IMPORTANT: This route MUST be before /:id to avoid being caught by that route
+router.put('/my-business', authenticate, authorize('ADMIN'), async (req, res, next) => {
+  try {
+    if (!req.user.business_id) {
+      return res.status(404).json({
+        success: false,
+        error: 'No business associated with this user'
+      });
+    }
+
+    const { name, email, phone, address, city, country, logo } = req.body;
+
+    await query(
+      `UPDATE businesses SET
+        name = COALESCE($1, name),
+        email = COALESCE($2, email),
+        phone = COALESCE($3, phone),
+        address = COALESCE($4, address),
+        city = COALESCE($5, city),
+        country = COALESCE($6, country),
+        logo = COALESCE($7, logo),
+        updated_at = CURRENT_TIMESTAMP
+       WHERE id = $8`,
+      [name, email, phone, address, city, country, logo, req.user.business_id]
+    );
+
+    const [updated] = await query('SELECT * FROM businesses WHERE id = $1', [req.user.business_id]);
+
+    res.json({
+      success: true,
+      data: updated[0],
+      message: 'Business updated successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // POST /api/businesses - Create new business (Super Admin only)
 // NOTE: No schema is created - uses business_id for multi-tenancy
 router.post('/', authenticate, isSuperAdmin, async (req, res, next) => {
