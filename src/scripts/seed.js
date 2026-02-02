@@ -65,19 +65,32 @@ const seedDatabase = async () => {
 
     console.log('✅ Cashier user created (username: cashier, password: cashier123)');
 
-    // Create sample categories
+    // Create all categories
     const categories = [
-      { name: 'Pain Relief', description: 'Analgesics and pain management medications' },
-      { name: 'Antibiotics', description: 'Antibacterial medications' },
-      { name: 'Vitamins', description: 'Vitamins and dietary supplements' },
-      { name: 'First Aid', description: 'First aid supplies and medications' },
-      { name: 'Cardiovascular', description: 'Heart and blood pressure medications' }
+      { name: 'Pain Relief', description: 'Medications for relieving pain including analgesics and anti-inflammatory drugs' },
+      { name: 'Antibiotics', description: 'Antibacterial medications used to treat bacterial infections' },
+      { name: 'Vitamins & Supplements', description: 'Vitamins, minerals, and dietary supplements for nutritional support' },
+      { name: 'First Aid', description: 'First aid supplies including bandages, antiseptics, and wound care products' },
+      { name: 'Cardiovascular', description: 'Medications for heart conditions, blood pressure, and cholesterol management' },
+      { name: 'Diabetes Care', description: 'Insulin, glucose monitors, and medications for diabetes management' },
+      { name: 'Respiratory', description: 'Medications for asthma, allergies, and respiratory conditions' },
+      { name: 'Gastrointestinal', description: 'Medications for digestive issues, antacids, and stomach remedies' },
+      { name: 'Mental Health', description: 'Medications for depression, anxiety, and psychiatric conditions' },
+      { name: 'Skin Care', description: 'Topical treatments for skin conditions, creams, and ointments' },
+      { name: 'Cold & Flu', description: 'Medications for cold, cough, flu, and fever symptoms' },
+      { name: 'Women\'s Health', description: 'Medications and products specific to women\'s health needs' },
+      { name: 'Men\'s Health', description: 'Medications and products specific to men\'s health needs' },
+      { name: 'Baby & Child Care', description: 'Pediatric medications and baby care products' },
+      { name: 'Elderly Care', description: 'Medications and products for geriatric health needs' },
+      { name: 'Sexual Health', description: 'Contraceptives and medications for sexual health conditions' },
+      { name: 'Eye Care', description: 'Eye drops, contact lens solutions, and ocular medications' },
+      { name: 'Dental Care', description: 'Oral medications, mouthwashes, and dental hygiene products' },
+      { name: 'Herbal & Natural', description: 'Herbal remedies, natural supplements, and alternative medicines' },
+      { name: 'Medical Devices', description: 'Medical equipment, testing kits, and health monitoring devices' }
     ];
 
-    const categoryIds = {};
     for (const cat of categories) {
       const id = uuidv4();
-      categoryIds[cat.name] = id;
       await pool.query(`
         INSERT INTO categories (id, name, description, created_at)
         VALUES (?, ?, ?, NOW())
@@ -85,47 +98,7 @@ const seedDatabase = async () => {
       `, [id, cat.name, cat.description]);
     }
 
-    console.log('✅ Categories created');
-
-    // Create sample medicines
-    const medicines = [
-      { name: 'Paracetamol 500mg', generic_name: 'Acetaminophen', category: 'Pain Relief', unit_price: 50, cost_price: 30, stock: 500, reorder: 100 },
-      { name: 'Ibuprofen 400mg', generic_name: 'Ibuprofen', category: 'Pain Relief', unit_price: 80, cost_price: 50, stock: 300, reorder: 50 },
-      { name: 'Amoxicillin 500mg', generic_name: 'Amoxicillin', category: 'Antibiotics', unit_price: 150, cost_price: 100, stock: 200, reorder: 40 },
-      { name: 'Vitamin C 1000mg', generic_name: 'Ascorbic Acid', category: 'Vitamins', unit_price: 120, cost_price: 70, stock: 400, reorder: 80 },
-      { name: 'Bandages (Pack)', generic_name: 'Medical Bandage', category: 'First Aid', unit_price: 200, cost_price: 120, stock: 150, reorder: 30 }
-    ];
-
-    for (const med of medicines) {
-      const id = uuidv4();
-      const expiryDate = new Date();
-      expiryDate.setFullYear(expiryDate.getFullYear() + 2);
-      
-      await pool.query(`
-        INSERT INTO medicines (id, name, generic_name, category_id, unit_price, cost_price, stock_quantity, reorder_level, expiry_date, batch_number, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())
-        ON DUPLICATE KEY UPDATE id=id
-      `, [id, med.name, med.generic_name, categoryIds[med.category], med.unit_price, med.cost_price, med.stock, med.reorder, expiryDate, `BATCH-${Date.now()}`]);
-    }
-
-    console.log('✅ Sample medicines created');
-
-    // Create sample suppliers
-    const suppliers = [
-      { name: 'PharmaCo Distributors', contact: 'John Smith', email: 'orders@pharmaco.com', phone: '+254700000001' },
-      { name: 'MediSupply Kenya', contact: 'Jane Doe', email: 'sales@medisupply.co.ke', phone: '+254700000002' }
-    ];
-
-    for (const sup of suppliers) {
-      const id = uuidv4();
-      await pool.query(`
-        INSERT INTO suppliers (id, name, contact_person, email, phone, active, created_at)
-        VALUES (?, ?, ?, ?, ?, true, NOW())
-        ON DUPLICATE KEY UPDATE id=id
-      `, [id, sup.name, sup.contact, sup.email, sup.phone]);
-    }
-
-    console.log('✅ Sample suppliers created');
+    console.log('✅ All categories created (20 categories)');
 
     console.log('\n🎉 Database seeding completed successfully!');
     console.log('\nYou can now login with:');
