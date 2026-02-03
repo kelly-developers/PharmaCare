@@ -399,6 +399,7 @@ router.get('/balance-sheet', authenticate, requireBusinessContext, authorize('AD
 });
 
 // GET /api/reports/income-statement - Get income statement
+// FIXED: Use profit field from sales to match dashboard calculation
 router.get('/income-statement', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
     const { startDate, endDate } = req.query;
@@ -407,7 +408,6 @@ router.get('/income-statement', authenticate, requireBusinessContext, authorize(
 
     let salesWhere = 'DATE(created_at) BETWEEN $1 AND $2';
     let creditWhere = 'DATE(cp.created_at) BETWEEN $1 AND $2';
-    let cogsWhere = "DATE(s.created_at) BETWEEN $1 AND $2 AND s.payment_method != 'CREDIT'";
     let expenseWhere = "status = 'APPROVED' AND DATE(expense_date) BETWEEN $1 AND $2";
     
     const params = [start, end];
@@ -415,24 +415,25 @@ router.get('/income-statement', authenticate, requireBusinessContext, authorize(
     if (req.businessId) {
       salesWhere += ' AND business_id = $3';
       creditWhere += ' AND cs.business_id = $3';
-      cogsWhere += ' AND s.business_id = $3';
       expenseWhere += ' AND business_id = $3';
       params.push(req.businessId);
     }
 
-    // Revenue - Exclude CREDIT sales from totals
-    const [revenueResult] = await query(`
+    // Revenue and Profit - Use the 'profit' field from sales table (same as dashboard)
+    // Exclude CREDIT sales from totals until paid
+    const [salesResult] = await query(`
       SELECT 
         COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN total_amount ELSE 0 END), 0) as gross_sales,
         COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN discount ELSE 0 END), 0) as discounts,
         COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN final_amount ELSE 0 END), 0) as net_sales,
+        COALESCE(SUM(CASE WHEN payment_method != 'CREDIT' THEN profit ELSE 0 END), 0) as gross_profit,
         COALESCE(SUM(CASE WHEN payment_method = 'CREDIT' THEN final_amount ELSE 0 END), 0) as credit_sales
       FROM sales
       WHERE ${salesWhere}
     `, params);
-    const revenue = getFirst(revenueResult);
+    const salesData = getFirst(salesResult);
 
-    // Add paid credit payments for the period
+    // Add paid credit payments and their profit for the period
     const [paidCreditResult] = await query(`
       SELECT COALESCE(SUM(cp.amount), 0) as paid_credit
       FROM credit_payments cp
@@ -440,15 +441,6 @@ router.get('/income-statement', authenticate, requireBusinessContext, authorize(
       WHERE ${creditWhere}
     `, params);
     const paidCredit = parseFloat(getFirst(paidCreditResult).paid_credit) || 0;
-
-    // Cost of goods sold
-    const [cogsResult] = await query(`
-      SELECT COALESCE(SUM(si.quantity * si.cost_price), 0) as value
-      FROM sale_items si
-      JOIN sales s ON si.sale_id = s.id
-      WHERE ${cogsWhere}
-    `, params);
-    const cogsValue = parseFloat(getFirst(cogsResult).value) || 0;
 
     // Operating expenses by category
     const [expenseBreakdown] = await query(`
@@ -459,17 +451,20 @@ router.get('/income-statement', authenticate, requireBusinessContext, authorize(
     `, params);
 
     const totalExpenses = expenseBreakdown.reduce((sum, e) => sum + parseFloat(e.total), 0);
-    const netSales = (parseFloat(revenue.net_sales) || 0) + paidCredit;
-    const grossProfit = netSales - cogsValue;
+    const netSales = (parseFloat(salesData.net_sales) || 0) + paidCredit;
+    const grossProfit = parseFloat(salesData.gross_profit) || 0; // Use profit field from sales
     const netIncome = grossProfit - totalExpenses;
+    
+    // Calculate COGS from gross profit: COGS = Revenue - Gross Profit
+    const cogsValue = netSales - grossProfit;
 
     res.json({
       success: true,
       data: {
         period: { startDate: start, endDate: end },
         revenue: {
-          grossSales: parseFloat(revenue.gross_sales) || 0,
-          discounts: parseFloat(revenue.discounts) || 0,
+          grossSales: parseFloat(salesData.gross_sales) || 0,
+          discounts: parseFloat(salesData.discounts) || 0,
           netSales
         },
         costOfGoodsSold: cogsValue,
