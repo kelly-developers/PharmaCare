@@ -11,7 +11,7 @@ const getFirst = (results) => results[0] || {};
 // GET /api/suppliers/active - Get active suppliers (must be before /:id)
 router.get('/active', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
   try {
-    let whereClause = '(is_active = true OR active = true)';
+    let whereClause = 'active = true';
     const params = [];
     
     if (req.businessId) {
@@ -42,7 +42,7 @@ router.get('/stats', authenticate, requireBusinessContext, authorize('ADMIN', 'M
     }
 
     const [totalResult] = await query(`SELECT COUNT(*) as total FROM suppliers WHERE ${whereClause}`, params);
-    const [activeResult] = await query(`SELECT COUNT(*) as active FROM suppliers WHERE ${whereClause} AND (is_active = true OR active = true)`, params);
+    const [activeResult] = await query(`SELECT COUNT(*) as active FROM suppliers WHERE ${whereClause} AND active = true`, params);
 
     res.json({
       success: true,
@@ -104,7 +104,7 @@ router.get('/', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGE
     
     if (active !== undefined) {
       paramIndex++;
-      whereClause += ` AND (is_active = $${paramIndex} OR active = $${paramIndex})`;
+      whereClause += ` AND active = $${paramIndex}`;
       params.push(active === 'true');
     }
 
@@ -166,15 +166,15 @@ router.post('/', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAG
 
     const id = uuidv4();
 
-    // FIXED: Include business_id
+    // FIXED: Remove is_active column - only use 'active'
     await query(`
-      INSERT INTO suppliers (id, business_id, name, contact_person, email, phone, address, city, country, notes, active, is_active, created_at, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+      INSERT INTO suppliers (id, business_id, name, contact_person, email, phone, address, city, country, notes, active, created_at, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
     `, [id, req.businessId || null, name.trim(), contact_person || null, email || null, phone || null, address || null, city || null, country || null, notes || null]);
 
     res.status(201).json({
       success: true,
-      data: { id, name: name.trim(), contact_person, email, phone, address, city, country, notes, active: true, is_active: true }
+      data: { id, name: name.trim(), contact_person, email, phone, address, city, country, notes, active: true }
     });
   } catch (error) {
     next(error);
@@ -235,7 +235,7 @@ router.delete('/:id', authenticate, requireBusinessContext, authorize('ADMIN', '
       return res.status(404).json({ success: false, error: 'Supplier not found' });
     }
 
-    await query('UPDATE suppliers SET active = false, is_active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
+    await query('UPDATE suppliers SET active = false, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
     res.json({ success: true, message: 'Supplier deactivated successfully' });
   } catch (error) {
     next(error);
@@ -259,7 +259,7 @@ router.patch('/:id/activate', authenticate, requireBusinessContext, authorize('A
       return res.status(404).json({ success: false, error: 'Supplier not found' });
     }
 
-    await query('UPDATE suppliers SET active = true, is_active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
+    await query('UPDATE suppliers SET active = true, updated_at = CURRENT_TIMESTAMP WHERE id = $1', [req.params.id]);
 
     const [suppliers] = await query('SELECT * FROM suppliers WHERE id = $1', [req.params.id]);
 

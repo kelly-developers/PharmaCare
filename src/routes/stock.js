@@ -756,4 +756,190 @@ router.post('/addition', authenticate, requireBusinessContext, authorize('ADMIN'
   }
 });
 
+// POST /api/stock/add - Alias for /api/stock/addition (frontend compatibility)
+router.post('/add', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+  try {
+    const { medicineId, medicine_id, quantity, batchNumber, batch_number, expiryDate, expiry_date, costPrice, cost_price, reason, notes } = req.body;
+
+    const medId = medicineId || medicine_id;
+    const qty = parseInt(quantity);
+
+    if (!medId || !qty || qty <= 0) {
+      return res.status(400).json({ success: false, error: 'Medicine ID and valid quantity are required' });
+    }
+
+    // Check medicine exists - verify business ownership
+    let medicineQuery = 'SELECT * FROM medicines WHERE id = $1';
+    const medicineParams = [medId];
+    
+    if (req.businessId) {
+      medicineQuery += ' AND business_id = $2';
+      medicineParams.push(req.businessId);
+    }
+
+    const [medicines] = await query(medicineQuery, medicineParams);
+    
+    if (medicines.length === 0) {
+      return res.status(404).json({ success: false, error: 'Medicine not found' });
+    }
+
+    const medicine = medicines[0];
+    const previousStock = parseInt(medicine.stock_quantity) || 0;
+    const newStock = previousStock + qty;
+
+    // Update medicine stock
+    await query(
+      'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [newStock, medId]
+    );
+
+    // Get user name
+    const [userResult] = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    const performedByName = getFirst(userResult).name || 'Unknown';
+
+    // Record stock movement with business_id
+    const movementId = uuidv4();
+    await query(`
+      INSERT INTO stock_movements (
+        id, business_id, medicine_id, medicine_name, type, quantity, batch_number, reason, notes,
+        created_by, performed_by_name, performed_by_role,
+        previous_stock, new_stock, created_at
+      )
+      VALUES ($1, $2, $3, $4, 'ADDITION', $5, $6, $7, $8, $9, $10, $11, $12, $13, CURRENT_TIMESTAMP)
+    `, [
+      movementId, req.businessId || null, medId, medicine.name, qty, 
+      batchNumber || batch_number || null,
+      reason || 'Stock Addition',
+      notes || null,
+      req.user.id, performedByName, req.user.role, previousStock, newStock
+    ]);
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id: movementId,
+        medicineId: medId,
+        medicineName: medicine.name,
+        type: 'ADDITION',
+        quantity: qty,
+        previousStock,
+        newStock,
+      },
+      message: 'Stock added successfully'
+    });
+  } catch (error) {
+    console.error('❌ Stock add error:', error);
+    next(error);
+  }
+});
+
+// POST /api/stock/internal-use - Record internal pharmacy use (expense from stock)
+router.post('/internal-use', authenticate, requireBusinessContext, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), async (req, res, next) => {
+  try {
+    const { medicineId, medicine_id, quantity, reason, notes } = req.body;
+    const medId = medicineId || medicine_id;
+    const qty = parseInt(quantity);
+
+    if (!medId || !qty || qty <= 0) {
+      return res.status(400).json({ success: false, error: 'Medicine ID and valid quantity are required' });
+    }
+
+    if (!reason) {
+      return res.status(400).json({ success: false, error: 'Reason for internal use is required' });
+    }
+
+    // Check medicine exists
+    let medicineQuery = 'SELECT * FROM medicines WHERE id = $1';
+    const medicineParams = [medId];
+    
+    if (req.businessId) {
+      medicineQuery += ' AND business_id = $2';
+      medicineParams.push(req.businessId);
+    }
+
+    const [medicines] = await query(medicineQuery, medicineParams);
+    
+    if (medicines.length === 0) {
+      return res.status(404).json({ success: false, error: 'Medicine not found' });
+    }
+
+    const medicine = medicines[0];
+    const previousStock = parseInt(medicine.stock_quantity) || 0;
+
+    if (previousStock < qty) {
+      return res.status(400).json({ success: false, error: `Insufficient stock. Available: ${previousStock}` });
+    }
+
+    const newStock = previousStock - qty;
+    const costPrice = parseFloat(medicine.cost_price) || 0;
+    const totalCost = costPrice * qty;
+
+    // Update medicine stock
+    await query(
+      'UPDATE medicines SET stock_quantity = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2',
+      [newStock, medId]
+    );
+
+    // Get user name
+    const [userResult] = await query('SELECT name FROM users WHERE id = $1', [req.user.id]);
+    const performedByName = getFirst(userResult).name || 'Unknown';
+
+    // Record stock movement as INTERNAL_USE (using LOSS type with reason)
+    const movementId = uuidv4();
+    await query(`
+      INSERT INTO stock_movements (
+        id, business_id, medicine_id, medicine_name, type, quantity, reason, notes,
+        created_by, performed_by_name, performed_by_role,
+        previous_stock, new_stock, created_at
+      )
+      VALUES ($1, $2, $3, $4, 'LOSS', $5, $6, $7, $8, $9, $10, $11, $12, CURRENT_TIMESTAMP)
+    `, [
+      movementId, req.businessId || null, medId, medicine.name, qty,
+      `INTERNAL USE: ${reason}`,
+      notes || null,
+      req.user.id, performedByName, req.user.role, previousStock, newStock
+    ]);
+
+    // Auto-create an expense record for this internal use
+    const expenseId = uuidv4();
+    const today = new Date().toISOString().split('T')[0];
+    
+    await query(`
+      INSERT INTO expenses (
+        id, business_id, category, description, amount, expense_date,
+        notes, status, created_by, created_by_name, created_at, updated_at
+      )
+      VALUES ($1, $2, 'Internal Use', $3, $4, $5, $6, 'APPROVED', $7, $8, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+    `, [
+      expenseId, req.businessId || null,
+      `Internal use: ${medicine.name} x${qty} - ${reason}`,
+      totalCost,
+      today,
+      notes || `${medicine.name} used internally for ${reason}`,
+      req.user.id,
+      performedByName
+    ]);
+
+    res.status(201).json({
+      success: true,
+      data: {
+        id: movementId,
+        expenseId,
+        medicineId: medId,
+        medicineName: medicine.name,
+        quantity: qty,
+        costPrice,
+        totalCost,
+        previousStock,
+        newStock,
+        reason,
+      },
+      message: `${medicine.name} x${qty} expensed for internal use. KSh ${totalCost.toLocaleString()} added to expenses.`
+    });
+  } catch (error) {
+    console.error('❌ Internal use error:', error);
+    next(error);
+  }
+});
+
 module.exports = router;
