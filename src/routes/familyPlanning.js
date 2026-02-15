@@ -372,18 +372,21 @@ router.put('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST'), as
   }
 });
 
-// DELETE /api/family-planning/:id - Delete/deactivate record
-router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER'), async (req, res, next) => {
+// DELETE /api/family-planning/:id - Permanently delete record
+router.delete('/:id', authenticate, authorize('ADMIN', 'MANAGER', 'PHARMACIST', 'CASHIER'), async (req, res, next) => {
   try {
-    // Soft delete by setting status to INACTIVE
-    await query(
-      "UPDATE family_planning SET status = 'INACTIVE', updated_at = CURRENT_TIMESTAMP WHERE id = $1",
-      [req.params.id]
-    );
+    // Check if record exists
+    const [existing] = await query('SELECT id, client_name FROM family_planning WHERE id = $1', [req.params.id]);
+    if (!existing || existing.length === 0) {
+      return res.status(404).json({ success: false, error: 'Record not found' });
+    }
+
+    // Permanently delete the record
+    await query('DELETE FROM family_planning WHERE id = $1', [req.params.id]);
 
     res.json({
       success: true,
-      message: 'Record deactivated successfully'
+      message: `Client ${existing[0].client_name} deleted successfully`
     });
   } catch (error) {
     next(error);

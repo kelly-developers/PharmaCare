@@ -542,6 +542,101 @@ router.post('/:id/suspend', authenticate, isSuperAdmin, async (req, res, next) =
   }
 });
 
+// DELETE /api/businesses/:id/permanent - Permanently delete business and all its data (Super Admin only)
+router.delete('/:id/permanent', authenticate, isSuperAdmin, async (req, res, next) => {
+  const client = await pool.connect();
+  try {
+    const { id } = req.params;
+
+    const [existing] = await query('SELECT id, name FROM businesses WHERE id = $1', [id]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, error: 'Business not found' });
+    }
+
+    await client.query('BEGIN');
+
+    // Delete all related data for this business
+    const tables = [
+      'family_planning', 'sale_items', 'sales', 'stock_movements', 'medicines',
+      'categories', 'suppliers', 'expenses', 'prescriptions', 'purchase_orders'
+    ];
+    
+    for (const table of tables) {
+      try {
+        await client.query(`DELETE FROM ${table} WHERE business_id = $1`, [id]);
+      } catch (e) {
+        // Table might not exist or not have business_id column, skip
+      }
+    }
+
+    // Delete users of this business
+    await client.query('DELETE FROM users WHERE business_id = $1', [id]);
+    
+    // Delete the business itself
+    await client.query('DELETE FROM businesses WHERE id = $1', [id]);
+
+    await client.query('COMMIT');
+
+    res.json({
+      success: true,
+      message: `Business "${existing[0].name}" and all its data permanently deleted`
+    });
+  } catch (error) {
+    await client.query('ROLLBACK');
+    next(error);
+  } finally {
+    client.release();
+  }
+});
+
+// DELETE /api/businesses/users/:userId/permanent - Permanently delete a user (Super Admin only)
+router.delete('/users/:userId/permanent', authenticate, isSuperAdmin, async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+
+    const [existing] = await query('SELECT id, name, email FROM users WHERE id = $1', [userId]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    await query('DELETE FROM users WHERE id = $1', [userId]);
+
+    res.json({
+      success: true,
+      message: `User "${existing[0].name}" permanently deleted`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PUT /api/businesses/users/:userId/reset-password - Reset user password (Super Admin only)
+router.put('/users/:userId/reset-password', authenticate, isSuperAdmin, async (req, res, next) => {
+  try {
+    const { userId } = req.params;
+    const { newPassword } = req.body;
+
+    if (!newPassword || newPassword.length < 6) {
+      return res.status(400).json({ success: false, error: 'Password must be at least 6 characters' });
+    }
+
+    const [existing] = await query('SELECT id, name FROM users WHERE id = $1', [userId]);
+    if (existing.length === 0) {
+      return res.status(404).json({ success: false, error: 'User not found' });
+    }
+
+    const hashedPassword = await bcrypt.hash(newPassword, 12);
+    await query('UPDATE users SET password = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2', [hashedPassword, userId]);
+
+    res.json({
+      success: true,
+      message: `Password reset for "${existing[0].name}"`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // POST /api/businesses/:id/users - Create user for a business (Business Admin or Super Admin)
 router.post('/:id/users', authenticate, async (req, res, next) => {
   try {
